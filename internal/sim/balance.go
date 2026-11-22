@@ -130,6 +130,7 @@ type TurnBalance struct {
 	InitialTowersPerLane int     `json:"initialTowersPerLane"` // pre-built defensive towers in each lane
 	EscalationStartRound int     `json:"escalationStartRound"` // round when sudden-death speed/tower-dmg scaling starts
 	BreachComebackCoins  int     `json:"breachComebackCoins"`  // emergency coins when losing a life
+	BreachBounty         int     `json:"breachBounty"`         // coins awarded to attacker when a unit crosses the enemy line
 	TowerKillBounty      int     `json:"towerKillBounty"`      // bounty for destroying an enemy tower
 }
 
@@ -361,6 +362,7 @@ func DefaultBalance() Balance {
 			InitialTowersPerLane: 1,
 			EscalationStartRound: 5,
 			BreachComebackCoins:  30,
+			BreachBounty:         25,
 			TowerKillBounty:      35,
 		},
 		Economy: EconomyBalance{

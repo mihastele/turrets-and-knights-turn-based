@@ -284,6 +284,41 @@ func TestBreachWinsWhenLaneTowerDestroyed(t *testing.T) {
 	}
 }
 
+func TestBreachAwardsGoldToCrossingSide(t *testing.T) {
+	s := newTestSim(t)
+	s.SetLives(3)
+	clearTowers(s)
+	s.anomalies = nil
+	startCombat(t, s)
+
+	coinsABefore := coinBalance(s, SideA)
+	coinsBBefore := coinBalance(s, SideB)
+
+	s.units = []*Unit{
+		{ID: 1, Type: Knight, Side: SideA, Lane: 1, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{}},
+		{ID: 2, Type: Knight, Side: SideB, Lane: 3, X: 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{}},
+	}
+	step(s, 0.5)
+
+	if s.Finished {
+		t.Fatalf("expected match to continue with 2 lives remaining, got finished=true")
+	}
+	wantA := s.cfg.Turn.BreachBounty + s.cfg.Turn.BreachComebackCoins
+	wantB := s.cfg.Turn.BreachBounty + s.cfg.Turn.BreachComebackCoins
+	if got := coinBalance(s, SideA) - coinsABefore; got != wantA {
+		t.Fatalf("SideA coin delta = %d, want %d", got, wantA)
+	}
+	if got := coinBalance(s, SideB) - coinsBBefore; got != wantB {
+		t.Fatalf("SideB coin delta = %d, want %d", got, wantB)
+	}
+	if s.players[SideA].BountyEarned != s.cfg.Turn.BreachBounty {
+		t.Fatalf("SideA BountyEarned = %d, want %d", s.players[SideA].BountyEarned, s.cfg.Turn.BreachBounty)
+	}
+	if s.players[SideB].BountyEarned != s.cfg.Turn.BreachBounty {
+		t.Fatalf("SideB BountyEarned = %d, want %d", s.players[SideB].BountyEarned, s.cfg.Turn.BreachBounty)
+	}
+}
+
 func TestResignEndsMatch(t *testing.T) {
 	s := newTestSim(t)
 	s.Resign(SideB)

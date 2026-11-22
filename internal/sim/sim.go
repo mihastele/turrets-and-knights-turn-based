@@ -1851,30 +1851,36 @@ func (s *Sim) removeDead() {
 }
 
 func (s *Sim) checkEnd() {
-	breachA := -1
-	breachB := -1
+	var breachLane = [2]int{-1, -1}
 	remaining := s.units[:0]
 	for _, u := range s.units {
 		if u.HP <= 0 {
 			continue
 		}
-		if u.Side == SideA && u.X >= FieldLength {
-			breachA = u.Lane
-			s.players[SideB].Lives--
-			if s.players[SideB].Lives > 0 && s.cfg.Turn.BreachComebackCoins > 0 {
-				s.players[SideB].Coins += s.cfg.Turn.BreachComebackCoins
-			}
+		crossed := (u.Side == SideA && u.X >= FieldLength) || (u.Side == SideB && u.X <= 0)
+		if !crossed {
+			remaining = append(remaining, u)
 			continue
 		}
-		if u.Side == SideB && u.X <= 0 {
-			breachB = u.Lane
-			s.players[SideA].Lives--
-			if s.players[SideA].Lives > 0 && s.cfg.Turn.BreachComebackCoins > 0 {
-				s.players[SideA].Coins += s.cfg.Turn.BreachComebackCoins
-			}
-			continue
+		attacker := u.Side
+		defender := 1 - attacker
+		breachLane[attacker] = u.Lane
+		s.players[defender].Lives--
+		if s.players[defender].Lives > 0 && s.cfg.Turn.BreachComebackCoins > 0 {
+			s.players[defender].Coins += s.cfg.Turn.BreachComebackCoins
 		}
-		remaining = append(remaining, u)
+		if bounty := s.cfg.Turn.BreachBounty; bounty > 0 {
+			s.players[attacker].Coins += bounty
+			s.players[attacker].BountyEarned += bounty
+			fxX := FieldLength
+			if attacker == SideB {
+				fxX = 0
+			}
+			s.fx = append(s.fx, FxEvent{Kind: "bounty", Unit: fmt.Sprintf("%d", bounty), Side: attacker, Lane: u.Lane, FromX: fxX, ToX: fxX, Slot: -1})
+			if s.players[defender].Lives > 0 {
+				s.addEvent(attacker, "bounty", "%s unit crossed the line in lane %d! (+%dc)", sideName(attacker), u.Lane+1, bounty)
+			}
+		}
 	}
 	s.units = remaining
 	if s.players[SideA].Lives < 0 {
@@ -1893,12 +1899,12 @@ func (s *Sim) checkEnd() {
 	case s.players[SideB].Lives == 0:
 		s.Finished = true
 		s.Winner = SideA
-		s.WinLane = breachA
-		s.addEvent(SideNone, "breach", "Blue breached in lane %d!", breachA+1)
+		s.WinLane = breachLane[SideA]
+		s.addEvent(SideNone, "breach", "Blue breached in lane %d!", breachLane[SideA]+1)
 	case s.players[SideA].Lives == 0:
 		s.Finished = true
 		s.Winner = SideB
-		s.WinLane = breachB
-		s.addEvent(SideNone, "breach", "Red breached in lane %d!", breachB+1)
+		s.WinLane = breachLane[SideB]
+		s.addEvent(SideNone, "breach", "Red breached in lane %d!", breachLane[SideB]+1)
 	}
 }
