@@ -2,6 +2,8 @@ services:
   lanesiege:
     build: .
     ports:
-      - "8180:8180"
+      - "${PORT:-8180}:${PORT:-8180}"
+    environment:
+      - PORT=${PORT:-8180}
     restart: unless-stopped
 

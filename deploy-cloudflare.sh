@@ -25,12 +25,15 @@
 set -euo pipefail
 
 # ---------- config (env overridable) ----------
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+if [ -z "${PORT:-}" ] && [ -f "$REPO_ROOT/.env" ]; then
+  PORT="$(grep -E '^PORT=' "$REPO_ROOT/.env" | tail -n1 | cut -d= -f2- | tr -d "\"' \r" || true)"
+fi
 PORT="${PORT:-8180}"
 BIND_ADDR="${BIND_ADDR:-127.0.0.1}"          # localhost only: cloudflared reaches it locally
 APP_USER="${APP_USER:-lanesiege}"
 BIN_PATH="/usr/local/bin/lanesiege"
 GO_INSTALL_DIR="/usr/local/go"
-REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 
 # ---------- pretty output ----------
 if [ -t 1 ]; then

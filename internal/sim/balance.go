@@ -132,6 +132,21 @@ type TurnBalance struct {
 	BreachComebackCoins  int     `json:"breachComebackCoins"`  // emergency coins when losing a life
 	BreachBounty         int     `json:"breachBounty"`         // coins awarded to attacker when a unit crosses the enemy line
 	TowerKillBounty      int     `json:"towerKillBounty"`      // bounty for destroying an enemy tower
+	PillageBonus         int     `json:"pillageBonus"`         // bonus coins per surviving unit past midfield
+	ScoutCost            int     `json:"scoutCost"`            // cost to flare a lane during Prep
+}
+
+// WallBalance configures buildable, upgradeable, and rebuildable lane reinforcement walls.
+type WallBalance struct {
+	Name              string  `json:"name"`
+	Cost              int     `json:"cost"`
+	MaxHP             float64 `json:"maxHp"`
+	BaseShield        float64 `json:"baseShield"`
+	PadX              float64 `json:"padX"`              // distance from owner's edge
+	UpgradeCosts      [2]int  `json:"upgradeCosts"`      // Lv1 and Lv2 upgrade costs
+	UpgradeHPPerLevel float64 `json:"upgradeHpPerLevel"` // fractional MaxHP gain per level
+	UpgradeShield     float64 `json:"upgradeShield"`     // fractional BaseShield gain per level
+	ThornDamage       float64 `json:"thornDamage"`       // melee reflect damage per hit per level
 }
 
 // EconomyBalance holds income-related knobs.
@@ -162,6 +177,12 @@ type AnomalyBalance struct {
 	HazardDPS      float64 `json:"hazardDps"`
 	HazardSlow     float64 `json:"hazardSlow"`
 	PickupRadius   float64 `json:"pickupRadius"`
+	MudMinRadius   float64 `json:"mudMinRadius"`
+	MudMaxRadius   float64 `json:"mudMaxRadius"`
+	MudSlow        float64 `json:"mudSlow"`
+	SpikeMinRadius float64 `json:"spikeMinRadius"`
+	SpikeMaxRadius float64 `json:"spikeMaxRadius"`
+	SpikeDPS       float64 `json:"spikeDps"`
 }
 
 // FieldEffectBalance configures a coupon-only, lane-targeted field effect.
@@ -190,6 +211,7 @@ type Balance struct {
 	SpawnInset float64                  `json:"spawnInset"` // distance from own edge where units stage
 	Units      map[UnitType]UnitBalance `json:"units"`
 	Turret     TurretBalance            `json:"turret"`
+	Wall       WallBalance              `json:"wall"`
 	Turn       TurnBalance              `json:"turn"`
 	Economy    EconomyBalance           `json:"economy"`
 	Anomaly    AnomalyBalance           `json:"anomaly"`
@@ -355,6 +377,17 @@ func DefaultBalance() Balance {
 			SpecialName:           "Flak & Focus Coils",
 			SpecialDesc:           "Allows tower to target Flying units & +25% attack speed",
 		},
+		Wall: WallBalance{
+			Name:              "Reinforcement Wall",
+			Cost:              45,
+			MaxHP:             280,
+			BaseShield:        80,
+			PadX:              22,
+			UpgradeCosts:      [2]int{30, 50},
+			UpgradeHPPerLevel: 0.40,
+			UpgradeShield:     0.50,
+			ThornDamage:       4.0,
+		},
 		Turn: TurnBalance{
 			PrepDuration:         30,
 			CombatDuration:       22,
@@ -364,6 +397,8 @@ func DefaultBalance() Balance {
 			BreachComebackCoins:  30,
 			BreachBounty:         25,
 			TowerKillBounty:      35,
+			PillageBonus:         5,
+			ScoutCost:            15,
 		},
 		Economy: EconomyBalance{
 			BaseIncome:     35,
@@ -390,6 +425,12 @@ func DefaultBalance() Balance {
 			HazardDPS:      6.0,
 			HazardSlow:     0.35,
 			PickupRadius:   3.2,
+			MudMinRadius:   3.5,
+			MudMaxRadius:   8.5,
+			MudSlow:        0.45,
+			SpikeMinRadius: 4.0,
+			SpikeMaxRadius: 7.0,
+			SpikeDPS:       9.0,
 		},
 		Coupon: CouponBalance{
 			RoundBonus: 10,
