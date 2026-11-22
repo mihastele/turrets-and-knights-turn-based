@@ -2486,6 +2486,54 @@ function showScreen(name) {
   state.screen = name;
   els.lobby.classList.toggle('hidden', name !== 'lobby');
   els.game.classList.toggle('hidden', name !== 'game');
+  if (name === 'lobby') refreshPublicLobbies();
+}
+
+let lobbyRequest = 0;
+async function refreshPublicLobbies() {
+  if (state.screen !== 'lobby' || document.hidden) return;
+  const request = ++lobbyRequest;
+  const status = $('public-lobbies-status');
+  const list = $('public-lobbies-list');
+  try {
+    const response = await fetch('/api/rooms', { cache: 'no-store' });
+    if (!response.ok) throw new Error('Unable to load public lobbies.');
+    const rooms = await response.json();
+    if (request !== lobbyRequest || state.screen !== 'lobby') return;
+    list.replaceChildren();
+    status.textContent = rooms.length ? '' : 'No public lobbies available.';
+    for (const room of rooms) {
+      const card = document.createElement('div');
+      card.className = 'public-room';
+      const details = document.createElement('div');
+      const code = document.createElement('strong');
+      code.textContent = `Room ${room.code}`;
+      const settings = document.createElement('p');
+      const win = room.winMode === 'breaches' ? `${room.breachesToWin} lanes to breach in one round` : `${room.lives} lives per player`;
+      settings.textContent = `${win} · Max breach loots: ${room.maxBreachLoots} · Hide Luck: ${room.hideLuck ? 'On' : 'Off'}`;
+      details.append(code, settings);
+      const button = document.createElement('button');
+      button.className = 'btn btn-secondary';
+      button.textContent = 'Join';
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        els.lobbyError.textContent = '';
+        try {
+          const res = await api(`/api/rooms/${encodeURIComponent(room.code)}/join`, { ...couponPayload(), publicOnly: true });
+          await enterGame(res.code, res.token, res.seat);
+        } catch (e) {
+          els.lobbyError.textContent = e.message;
+          refreshPublicLobbies();
+        }
+      });
+      card.append(details, button);
+      list.append(card);
+    }
+  } catch {
+    if (request !== lobbyRequest) return;
+    list.replaceChildren();
+    status.textContent = 'Unable to load public lobbies. Retrying…';
+  }
 }
 
 async function enterGame(code, token, seat) {
@@ -2516,7 +2564,7 @@ async function onCreate() {
     const hideLuck = $('room-hide-luck') ? $('room-hide-luck').checked : true;
     const winMode = $('room-win-mode') ? $('room-win-mode').value : 'lives';
     const maxBreachLoots = Number($('room-max-breach-loots') ? $('room-max-breach-loots').value : 5);
-    const payload = { ...couponPayload(), winMode, maxBreachLoots, hideLuck };
+    const payload = { ...couponPayload(), winMode, maxBreachLoots, hideLuck, private: $('room-private').checked };
     if (winMode === 'breaches') {
       payload.breachesToWin = Number($('room-breaches-to-win').value);
     } else {
@@ -2826,6 +2874,8 @@ document.addEventListener('pointerdown', () => SFX.unlock(), { once: true });
 els.muteBtn.textContent = SFX.isMuted() ? '🔇' : '🔊';
 refreshCouponStatus();
 setInterval(refreshCouponStatus, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshCouponStatus(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshCouponStatus(); refreshPublicLobbies(); } });
+setInterval(refreshPublicLobbies, 5000);
+refreshPublicLobbies();
 requestAnimationFrame(draw);
 tryResume();

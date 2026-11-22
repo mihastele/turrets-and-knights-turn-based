@@ -104,6 +104,11 @@ html, body {
 .code-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56,189,248,.15); }
 
 .lobby-error { color: var(--bad); min-height: 1.4em; margin: 10px 0 0; font-size: 14px; }
+.public-lobbies { width: 100%; text-align: left; }
+.public-lobbies h2 { font-size: 16px; margin: 8px 0; }
+.public-lobbies p { color: var(--muted); font-size: 13px; }
+.public-room { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; padding: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+.public-room p { margin: 5px 0 0; line-height: 1.5; }
 
 .howto { text-align: left; margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
 .howto h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); }

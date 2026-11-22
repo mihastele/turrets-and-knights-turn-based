@@ -41,12 +41,21 @@
           <input type="checkbox" id="room-hide-luck" checked>
           <span>🎲 Hide Luck <small>(field items stay invisible until combat starts)</small></span>
         </label>
+        <label class="lobby-checkbox" for="room-private">
+          <input type="checkbox" id="room-private">
+          <span>Make lobby private</span>
+        </label>
         <button id="btn-create" class="btn btn-primary btn-big">Create Room</button>
         <div class="divider"><span>or</span></div>
         <form id="join-form" class="join-row">
           <input id="join-code" class="code-input" maxlength="4" placeholder="CODE" autocomplete="off" spellcheck="false">
           <button type="submit" class="btn btn-secondary">Join</button>
         </form>
+        <section class="public-lobbies" aria-labelledby="public-lobbies-title">
+          <h2 id="public-lobbies-title">Public lobbies</h2>
+          <p id="public-lobbies-status" role="status">Loading lobbies…</p>
+          <div id="public-lobbies-list"></div>
+        </section>
       </div>
 
       <div class="coupon-box">
