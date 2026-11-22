@@ -65,6 +65,14 @@ html, body {
 .tagline { color: var(--muted); margin: 0 0 22px; font-size: 14px; letter-spacing: 1px; }
 
 .lobby-actions { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.lobby-checkbox {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  font-size: 13px; color: var(--text); user-select: none;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 14px; width: 100%; justify-content: center;
+}
+.lobby-checkbox input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
+.lobby-checkbox small { color: var(--muted); font-size: 11px; }
 .divider { display: flex; align-items: center; gap: 12px; width: 100%; color: var(--muted); font-size: 12px; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 

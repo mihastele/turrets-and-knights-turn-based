@@ -23,6 +23,10 @@
 
       <div class="lobby-actions">
         <label for="room-lives">Lives per player <select id="room-lives"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option></select></label>
+        <label class="lobby-checkbox" for="room-hide-luck">
+          <input type="checkbox" id="room-hide-luck" checked>
+          <span>🎲 Hide Luck <small>(field items stay invisible until combat starts)</small></span>
+        </label>
         <button id="btn-create" class="btn btn-primary btn-big">Create Room</button>
         <div class="divider"><span>or</span></div>
         <form id="join-form" class="join-row">
@@ -190,7 +194,7 @@
         </section>
 
         <section class="panel">
-          <h3 class="panel-title">Turret upgrades <span class="panel-hint">heal? never. +stats only</span></h3>
+          <h3 class="panel-title">Tower &amp; Wall defenses <span class="panel-hint">fortify &amp; upgrade per lane</span></h3>
           <div id="turret-upgrades" class="turret-upgrade-grid"></div>
         </section>
 

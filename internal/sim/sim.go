@@ -37,6 +37,9 @@ const (
 	ActionUpgradeFactory
 	ActionReady
 	ActionRecallUnit
+	ActionBuildWall
+	ActionUpgradeWall
+	ActionScoutLane
 )
 
 // Coupon field-effect identifiers (balance lives in Balance.Coupon).
@@ -75,6 +78,9 @@ var (
 	ErrWrongPhase     = errors.New("action not allowed in this phase")
 	ErrUnknownTrack   = errors.New("unknown upgrade track")
 	ErrNoStagedUnit   = errors.New("no staged unit to recall")
+	ErrWallExists     = errors.New("reinforcement wall already stands in that lane")
+	ErrNoWall         = errors.New("no reinforcement wall in that lane")
+	ErrAlreadyScouted = errors.New("lane already scouted this round")
 )
 
 // ---------------------------------------------------------------------------
@@ -133,19 +139,34 @@ type Cache struct {
 	ExpiresAt float64 `json:"expiresAt"`
 }
 
+// Wall is a buildable, upgradeable, and rebuildable defensive barrier in a lane.
+type Wall struct {
+	Side      int     `json:"side"`
+	Lane      int     `json:"lane"`
+	X         float64 `json:"x"`
+	Level     int     `json:"level"`
+	HP        float64 `json:"hp"`
+	MaxHP     float64 `json:"maxHp"`
+	Shield    float64 `json:"shield"`
+	MaxShield float64 `json:"maxShield"`
+	LastHitBy int     `json:"-"`
+}
+
 // Anomaly is a random lane feature spawned per round: loot, shrine, neutral monster, or hazard.
 type Anomaly struct {
-	ID       int64   `json:"id"`
-	Kind     string  `json:"kind"` // "loot_coins" | "loot_buff" | "neutral_golem" | "hazard_fire" | "hazard_tar"
-	Lane     int     `json:"lane"`
-	X        float64 `json:"x"`
-	HP       float64 `json:"hp"`
-	MaxHP    float64 `json:"maxHp"`
-	Damage   float64 `json:"-"`
-	Cooldown float64 `json:"-"`
-	Value    int     `json:"value"` // coin bounty or amount
-	LastHitBy int    `json:"-"`
-	TickIn   float64 `json:"-"`
+	ID        int64   `json:"id"`
+	Kind      string  `json:"kind"` // "loot_coins" | "loot_buff" | "neutral_golem" | "hazard_fire" | "hazard_tar" | "hazard_mud" | "hazard_spikes"
+	Lane      int     `json:"lane"`
+	X         float64 `json:"x"`
+	Radius    float64 `json:"radius"`
+	Contested bool    `json:"contested"`
+	HP        float64 `json:"hp"`
+	MaxHP     float64 `json:"maxHp"`
+	Damage    float64 `json:"-"`
+	Cooldown  float64 `json:"-"`
+	Value     int     `json:"value"` // coin bounty or amount
+	LastHitBy int     `json:"-"`
+	TickIn    float64 `json:"-"`
 }
 
 // Burn is an active Dragon Fire field effect.
@@ -250,7 +271,13 @@ type Sim struct {
 
 	units   []*Unit
 	turrets [2][NumLanes][TurretSlots]*Turret
+	walls   [2][NumLanes]*Wall
 	players [2]Player
+
+	HideLuck         bool `json:"hideLuck"`
+	scoutedLanes     [2][NumLanes]bool
+	laneParticipated [2][NumLanes]bool
+	laneDominance    [NumLanes]int
 
 	Overtime     bool    `json:"overtime"`
 	TurretFactor float64 `json:"turretFactor"`
@@ -297,6 +324,9 @@ func New(seed int64, cfg Balance) *Sim {
 		s.lastKillAt[i] = -100
 		s.abilityReady[i] = map[string]float64{}
 	}
+	for lane := 0; lane < NumLanes; lane++ {
+		s.laneDominance[lane] = NoSide
+	}
 
 	// Place initial protective towers in every lane for both sides.
 	initialSlots := cfg.Turn.InitialTowersPerLane
@@ -337,6 +367,11 @@ func (s *Sim) SetLives(lives int) {
 	for i := range s.players {
 		s.players[i].Lives = lives
 	}
+}
+
+// SetHideLuck configures whether field anomalies are hidden during Prep until Combat starts.
+func (s *Sim) SetHideLuck(hide bool) {
+	s.HideLuck = hide
 }
 
 // Balance returns the balance table the sim was built with.
@@ -660,6 +695,93 @@ func (s *Sim) ApplyAction(a Action) error {
 
 	case ActionFieldEffect:
 		return s.applyFieldEffect(a, p)
+
+	case ActionBuildWall:
+		if s.Phase != PhasePrep {
+			return fmt.Errorf("%w: build walls during Preparation Phase", ErrWrongPhase)
+		}
+		if !validLane(a.Lane) {
+			return ErrInvalidLane
+		}
+		if s.Overtime {
+			return ErrOvertime
+		}
+		if s.walls[a.Side][a.Lane] != nil {
+			return ErrWallExists
+		}
+		cost := s.cfg.Wall.Cost
+		if p.Coins < cost {
+			return fmt.Errorf("%w: need %d", ErrNotEnoughCoins, cost)
+		}
+		p.Coins -= cost
+		x := s.cfg.Wall.PadX
+		if a.Side == SideB {
+			x = FieldLength - s.cfg.Wall.PadX
+		}
+		s.walls[a.Side][a.Lane] = &Wall{
+			Side:      a.Side,
+			Lane:      a.Lane,
+			X:         x,
+			Level:     0,
+			HP:        s.cfg.Wall.MaxHP,
+			MaxHP:     s.cfg.Wall.MaxHP,
+			Shield:    s.cfg.Wall.BaseShield,
+			MaxShield: s.cfg.Wall.BaseShield,
+			LastHitBy: -1,
+		}
+		s.addEvent(a.Side, "wall", "%s fortified Lane %d with a Reinforcement Wall", sideName(a.Side), a.Lane+1)
+		return nil
+
+	case ActionUpgradeWall:
+		if s.Phase != PhasePrep {
+			return fmt.Errorf("%w: upgrade walls during Preparation Phase", ErrWrongPhase)
+		}
+		if !validLane(a.Lane) {
+			return ErrInvalidLane
+		}
+		if s.Overtime {
+			return ErrOvertime
+		}
+		w := s.walls[a.Side][a.Lane]
+		if w == nil {
+			return ErrNoWall
+		}
+		if w.Level >= 2 {
+			return ErrMaxLevel
+		}
+		cost := s.cfg.Wall.UpgradeCosts[w.Level]
+		if p.Coins < cost {
+			return fmt.Errorf("%w: need %d", ErrNotEnoughCoins, cost)
+		}
+		p.Coins -= cost
+		w.Level++
+		hpGain := s.cfg.Wall.MaxHP * s.cfg.Wall.UpgradeHPPerLevel
+		w.MaxHP += hpGain
+		w.HP = math.Min(w.MaxHP, w.HP+hpGain)
+		shGain := s.cfg.Wall.BaseShield * s.cfg.Wall.UpgradeShield
+		w.MaxShield += shGain
+		w.Shield = w.MaxShield
+		s.addEvent(a.Side, "wall", "%s upgraded Lane %d Wall (Lv%d)", sideName(a.Side), a.Lane+1, w.Level+1)
+		return nil
+
+	case ActionScoutLane:
+		if s.Phase != PhasePrep {
+			return fmt.Errorf("%w: scout lanes during Preparation Phase", ErrWrongPhase)
+		}
+		if !validLane(a.Lane) {
+			return ErrInvalidLane
+		}
+		if s.scoutedLanes[a.Side][a.Lane] {
+			return ErrAlreadyScouted
+		}
+		cost := s.cfg.Turn.ScoutCost
+		if p.Coins < cost {
+			return fmt.Errorf("%w: need %d", ErrNotEnoughCoins, cost)
+		}
+		p.Coins -= cost
+		s.scoutedLanes[a.Side][a.Lane] = true
+		s.addEvent(a.Side, "scout", "%s launched a Scout Flare in Lane %d!", sideName(a.Side), a.Lane+1)
+		return nil
 	}
 	return errors.New("unknown action")
 }
@@ -950,33 +1072,96 @@ func (s *Sim) startCombatPhase() {
 	s.PhaseRemaining = s.cfg.Turn.CombatDuration
 	s.Ready = [2]bool{}
 	s.combatElapsed = 0
+	s.laneParticipated = [2][NumLanes]bool{}
 	for _, u := range s.units {
 		u.Staged = false
 		u.DistanceMoved = 0
 		u.ChargeReady = false
+		if u.HP > 0 && (u.Side == SideA || u.Side == SideB) && validLane(u.Lane) {
+			s.laneParticipated[u.Side][u.Lane] = true
+		}
+	}
+	for _, an := range s.anomalies {
+		if an.Kind == "loot_coins" && validLane(an.Lane) {
+			an.Contested = s.laneParticipated[SideA][an.Lane] && s.laneParticipated[SideB][an.Lane]
+		}
 	}
 	s.addEvent(SideNone, "combatStart", "Round %d Combat Begins!", s.Round)
 }
 
 func (s *Sim) endCombatPhase() {
-	// Return surviving units to each player's Soldier Pool!
+	// Resolve any remaining Gold Loot anomalies based on lane participation or remaining lane strength
+	for _, an := range s.anomalies {
+		if an.Kind != "loot_coins" || !validLane(an.Lane) {
+			continue
+		}
+		pA := s.laneParticipated[SideA][an.Lane]
+		pB := s.laneParticipated[SideB][an.Lane]
+		winner := NoSide
+		if pA && !pB {
+			winner = SideA
+		} else if pB && !pA {
+			winner = SideB
+		} else if pA && pB {
+			hpA, hpB := s.laneRemainingPower(SideA, an.Lane), s.laneRemainingPower(SideB, an.Lane)
+			if hpA > hpB {
+				winner = SideA
+			} else if hpB > hpA {
+				winner = SideB
+			}
+		}
+		if winner == SideA || winner == SideB {
+			s.players[winner].Coins += an.Value
+			s.players[winner].BountyEarned += an.Value
+			s.addEvent(winner, "supplyClaim", "%s won +%dc gold loot in lane %d!", sideName(winner), an.Value, an.Lane+1)
+			s.events[len(s.events)-1].Lane = an.Lane
+			s.events[len(s.events)-1].Amount = an.Value
+		}
+	}
+
+	// Award Midfield Pillage & compute Lane Dominance, then return surviving units to Soldier Pool
 	returned := [2]int{}
+	pillage := [2]int{}
+	alivePerLane := [2][NumLanes]int{}
 	for _, u := range s.units {
 		if u.HP > 0 && (u.Side == SideA || u.Side == SideB) {
+			if validLane(u.Lane) {
+				alivePerLane[u.Side][u.Lane]++
+			}
+			if s.cfg.Turn.PillageBonus > 0 && ((u.Side == SideA && u.X > FieldLength/2) || (u.Side == SideB && u.X < FieldLength/2)) {
+				s.players[u.Side].Coins += s.cfg.Turn.PillageBonus
+				s.players[u.Side].BountyEarned += s.cfg.Turn.PillageBonus
+				pillage[u.Side] += s.cfg.Turn.PillageBonus
+			}
 			s.players[u.Side].SoldierPool[u.Type]++
 			returned[u.Side]++
 		}
 	}
+	for lane := 0; lane < NumLanes; lane++ {
+		a, b := alivePerLane[SideA][lane], alivePerLane[SideB][lane]
+		if a > 0 && b == 0 {
+			s.laneDominance[lane] = SideA
+		} else if b > 0 && a == 0 {
+			s.laneDominance[lane] = SideB
+		} else {
+			s.laneDominance[lane] = NoSide
+		}
+	}
 	s.units = nil
 	s.burns = nil
+	s.scoutedLanes = [2][NumLanes]bool{}
+	s.laneParticipated = [2][NumLanes]bool{}
 
-	// Recharge turret shields between rounds
+	// Recharge turret and wall shields between rounds
 	for side := 0; side < 2; side++ {
 		for lane := 0; lane < NumLanes; lane++ {
 			for slot := 0; slot < TurretSlots; slot++ {
 				if t := s.turrets[side][lane][slot]; t != nil {
 					t.Shield = t.MaxShield
 				}
+			}
+			if w := s.walls[side][lane]; w != nil {
+				w.Shield = w.MaxShield
 			}
 		}
 	}
@@ -1010,7 +1195,21 @@ func (s *Sim) endCombatPhase() {
 	s.PhaseRemaining = s.cfg.Turn.PrepDuration
 	s.Ready = [2]bool{}
 	s.spawnRoundAnomalies()
-	s.addEvent(SideNone, "roundPrep", "Round %d Prep — Survivors returned (Blue %d, Red %d). Shared windfall +%dc!", s.Round, returned[0], returned[1], windfall)
+	pillageNote := ""
+	if pillage[0] > 0 || pillage[1] > 0 {
+		pillageNote = fmt.Sprintf(" Pillage: Blue +%dc, Red +%dc.", pillage[0], pillage[1])
+	}
+	s.addEvent(SideNone, "roundPrep", "Round %d Prep — Survivors returned (Blue %d, Red %d).%s Windfall +%dc!", s.Round, returned[0], returned[1], pillageNote, windfall)
+}
+
+func (s *Sim) laneRemainingPower(side, lane int) float64 {
+	total := 0.0
+	for _, u := range s.units {
+		if u.Side == side && u.Lane == lane && u.HP > 0 {
+			total += u.HP + u.Shield
+		}
+	}
+	return total
 }
 
 func (s *Sim) resolveMaxRoundsWinner() {
@@ -1076,7 +1275,7 @@ func (s *Sim) spawnRoundAnomalies() {
 	if maxCount > minCount {
 		count += s.rng.Intn(maxCount - minCount + 1)
 	}
-	kinds := []string{"loot_coins", "loot_buff", "neutral_golem", "hazard_fire", "hazard_tar"}
+	kinds := []string{"loot_coins", "loot_buff", "neutral_golem", "hazard_fire", "hazard_tar", "hazard_mud", "hazard_spikes"}
 	usedLanes := map[int]bool{}
 	for i := 0; i < count; i++ {
 		lane := s.rng.Intn(NumLanes)
@@ -1091,6 +1290,7 @@ func (s *Sim) spawnRoundAnomalies() {
 			Kind:      kind,
 			Lane:      lane,
 			X:         x,
+			Radius:    ab.PickupRadius,
 			LastHitBy: -1,
 			TickIn:    0.5,
 		}
@@ -1104,6 +1304,19 @@ func (s *Sim) spawnRoundAnomalies() {
 			anom.MaxHP = ab.MonsterHP
 			anom.Damage = ab.MonsterDamage
 			anom.Value = ab.MonsterBounty
+		case "hazard_mud":
+			minR, maxR := ab.MudMinRadius, ab.MudMaxRadius
+			if maxR < minR {
+				maxR = minR
+			}
+			anom.Radius = minR + s.rng.Float64()*(maxR-minR)
+		case "hazard_spikes":
+			minR, maxR := ab.SpikeMinRadius, ab.SpikeMaxRadius
+			if maxR < minR {
+				maxR = minR
+			}
+			anom.Radius = minR + s.rng.Float64()*(maxR-minR)
+			anom.TickIn = 0.4
 		case "hazard_fire", "hazard_tar":
 			// passive environmental hazard
 		}
@@ -1203,16 +1416,37 @@ func (s *Sim) stepAnomalies(dt float64) {
 		switch an.Kind {
 		case "loot_coins":
 			claimed := -1
+			aliveA, aliveB := 0, 0
 			for _, u := range s.units {
-				if u.Lane == an.Lane && u.HP > 0 && absDist(u.X, an.X) <= ab.PickupRadius {
-					claimed = u.Side
-					break
+				if u.Lane == an.Lane && u.HP > 0 {
+					if u.Side == SideA {
+						aliveA++
+					} else if u.Side == SideB {
+						aliveB++
+					}
+				}
+			}
+			bothParticipated := s.laneParticipated[SideA][an.Lane] && s.laneParticipated[SideB][an.Lane]
+			if bothParticipated {
+				an.Contested = aliveA > 0 && aliveB > 0
+				if aliveA > 0 && aliveB == 0 {
+					claimed = SideA
+				} else if aliveB > 0 && aliveA == 0 {
+					claimed = SideB
+				}
+			} else {
+				an.Contested = false
+				for _, u := range s.units {
+					if u.Lane == an.Lane && u.HP > 0 && absDist(u.X, an.X) <= ab.PickupRadius {
+						claimed = u.Side
+						break
+					}
 				}
 			}
 			if claimed >= 0 {
 				s.players[claimed].Coins += an.Value
 				s.players[claimed].BountyEarned += an.Value
-				s.addEvent(claimed, "supplyClaim", "%s claimed +%dc loot in lane %d!", sideName(claimed), an.Value, an.Lane+1)
+				s.addEvent(claimed, "supplyClaim", "%s won +%dc gold loot in lane %d!", sideName(claimed), an.Value, an.Lane+1)
 				s.events[len(s.events)-1].Lane = an.Lane
 				s.events[len(s.events)-1].Amount = an.Value
 				s.anomalies = append(s.anomalies[:i], s.anomalies[i+1:]...)
@@ -1282,6 +1516,21 @@ func (s *Sim) stepAnomalies(dt float64) {
 					}
 				}
 			}
+
+		case "hazard_spikes":
+			an.TickIn -= dt
+			if an.TickIn <= 0 {
+				an.TickIn += 0.4
+				r := an.Radius
+				if r <= 0 {
+					r = ab.SpikeMinRadius
+				}
+				for _, u := range s.units {
+					if u.Lane == an.Lane && u.HP > 0 && !s.cfg.Units[u.Type].Flying && absDist(u.X, an.X) <= r {
+						s.dealDamage(SideNone, u, ab.SpikeDPS*0.4, 1.0)
+					}
+				}
+			}
 		}
 		i++
 	}
@@ -1325,6 +1574,33 @@ func (s *Sim) dealDamage(attackerSide int, target any, dmg float64, shieldMult f
 		}
 	case *Turret:
 		armor := float64(t.TrackLevels[TrackShield]) * 1.5
+		effDmg := math.Max(1.0, dmg-armor)
+		dealt := 0.0
+		if t.Shield > 0 {
+			shieldDmg := effDmg * shieldMult
+			if shieldDmg >= t.Shield {
+				usedRatio := t.Shield / shieldDmg
+				dealt += t.Shield
+				t.Shield = 0
+				remDmg := effDmg * (1.0 - usedRatio)
+				hpDmg := math.Min(t.HP, remDmg)
+				t.HP -= hpDmg
+				dealt += hpDmg
+			} else {
+				t.Shield -= shieldDmg
+				dealt += shieldDmg
+			}
+		} else {
+			hpDmg := math.Min(t.HP, effDmg)
+			t.HP -= hpDmg
+			dealt += hpDmg
+		}
+		if attackerSide == SideA || attackerSide == SideB {
+			s.players[attackerSide].DamageDealt += dealt
+			t.LastHitBy = attackerSide
+		}
+	case *Wall:
+		armor := float64(t.Level) * 2.0
 		effDmg := math.Max(1.0, dmg-armor)
 		dealt := 0.0
 		if t.Shield > 0 {
@@ -1499,19 +1775,56 @@ func (s *Sim) stepUnits(dt float64) {
 				s.emitAttackFx(u, t.X)
 			}
 
+		case *Wall:
+			if u.Cooldown <= 0 {
+				dmg := u.Damage * s.counterMultiplier(u.Type, ClassStructure, u.TrackLevels)
+				if ub.VsTurretDamage > 0 {
+					dmgLvl := u.TrackLevels[TrackDamage]
+					mul := 1 + float64(dmgLvl)*ub.UpgradeDamage
+					if u.Type == Ram && u.TrackLevels[TrackSpecial] > 0 {
+						mul *= 1.40
+					} else if u.Type == Siege && u.TrackLevels[TrackSpecial] > 0 {
+						mul *= 1.35
+					}
+					if s.Round >= s.cfg.Turn.EscalationStartRound {
+						mul *= (1.0 + float64(s.Round-s.cfg.Turn.EscalationStartRound+1)*0.20)
+					}
+					dmg = ub.VsTurretDamage * mul
+				}
+				s.dealDamage(u.Side, t, dmg, shieldMult)
+				if t.Level > 0 && !ub.Flying && ub.Range <= 4.0 && s.cfg.Wall.ThornDamage > 0 {
+					s.dealDamage(t.Side, u, s.cfg.Wall.ThornDamage*float64(t.Level), 1.0)
+				}
+				u.Cooldown = ub.AttackInterval
+				s.emitAttackFx(u, t.X)
+			}
+
 		default:
 			moveSpeed := ub.Speed * (1.0 + float64(u.TrackLevels[TrackAttackSpeed])*0.07 + u.SpeedBuff*0.5)
+			if validLane(u.Lane) && s.laneDominance[u.Lane] == u.Side {
+				moveSpeed *= 1.10
+			}
 			if s.Round >= s.cfg.Turn.EscalationStartRound {
 				moveSpeed *= (1.0 + float64(s.Round-s.cfg.Turn.EscalationStartRound+1)*0.12)
 			}
 			if !ub.Flying && s.inTarHazard(u.Lane, u.X) {
 				moveSpeed *= (1.0 - s.cfg.Anomaly.HazardSlow)
 			}
+			if !ub.Flying && s.inMudHazard(u.Lane, u.X) {
+				moveSpeed *= (1.0 - s.cfg.Anomaly.MudSlow)
+			}
 			stepDist := moveSpeed * dt
 			nextX := u.X + direction(u.Side)*stepDist
 
-			// Ground units cannot walk past an alive enemy protective tower in their lane
+			// Ground units cannot walk past an alive enemy wall or protective tower in their lane
 			if !ub.Flying {
+				if blockX, blocked := s.enemyWallBlockX(u.Side, u.Lane); blocked {
+					if u.Side == SideA && nextX > blockX-1.5 {
+						nextX = math.Max(u.X, blockX-1.5)
+					} else if u.Side == SideB && nextX < blockX+1.5 {
+						nextX = math.Min(u.X, blockX+1.5)
+					}
+				}
 				if blockX, blocked := s.enemyTurretBlockX(u.Side, u.Lane); blocked {
 					if u.Side == SideA && nextX > blockX-1.5 {
 						nextX = math.Max(u.X, blockX-1.5)
@@ -1540,6 +1853,31 @@ func (s *Sim) inTarHazard(lane int, x float64) bool {
 	return false
 }
 
+func (s *Sim) inMudHazard(lane int, x float64) bool {
+	for _, an := range s.anomalies {
+		if an.Kind == "hazard_mud" && an.Lane == lane {
+			r := an.Radius
+			if r <= 0 {
+				r = s.cfg.Anomaly.MudMinRadius
+			}
+			if absDist(x, an.X) <= r {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Sim) enemyWallBlockX(side, lane int) (float64, bool) {
+	enemy := 1 - side
+	if validLane(lane) {
+		if w := s.walls[enemy][lane]; w != nil && w.HP > 0 {
+			return w.X, true
+		}
+	}
+	return 0, false
+}
+
 func (s *Sim) enemyTurretBlockX(side, lane int) (float64, bool) {
 	enemy := 1 - side
 	for slot := 0; slot < TurretSlots; slot++ {
@@ -1553,8 +1891,11 @@ func (s *Sim) enemyTurretBlockX(side, lane int) (float64, bool) {
 func (s *Sim) findTarget(u *Unit) any {
 	ub := s.cfg.Units[u.Type]
 
-	// Rams prioritize enemy turrets when in range
+	// Rams prioritize enemy walls & turrets when in range
 	if u.Type == Ram {
+		if w := s.nearestEnemyWall(u, ub.Range); w != nil {
+			return w
+		}
 		if tr := s.nearestEnemyTurret(u, ub.Range); tr != nil {
 			return tr
 		}
@@ -1565,6 +1906,9 @@ func (s *Sim) findTarget(u *Unit) any {
 	}
 
 	if u.Type == Siege {
+		if w := s.nearestEnemyWall(u, ub.Range); w != nil && absDist(u.X, w.X) >= ub.MinRange {
+			return w
+		}
 		if tr := s.nearestEnemyTurret(u, ub.Range); tr != nil && absDist(u.X, tr.X) >= ub.MinRange {
 			return tr
 		}
@@ -1574,12 +1918,15 @@ func (s *Sim) findTarget(u *Unit) any {
 		return nil
 	}
 
-	// Standard troops: fight enemy units -> neutral golems -> enemy towers
+	// Standard troops: fight enemy units -> neutral golems -> enemy walls -> enemy towers
 	if eu := s.nearestEnemyUnit(u, ub.Range); eu != nil {
 		return eu
 	}
 	if an := s.nearestNeutralMonster(u, ub.Range); an != nil {
 		return an
+	}
+	if w := s.nearestEnemyWall(u, ub.Range); w != nil {
+		return w
 	}
 	if tr := s.nearestEnemyTurret(u, ub.Range); tr != nil {
 		return tr
@@ -1635,6 +1982,17 @@ func (s *Sim) nearestNeutralMonster(u *Unit, maxRange float64) *Anomaly {
 	return best
 }
 
+func (s *Sim) nearestEnemyWall(u *Unit, maxRange float64) *Wall {
+	if !validLane(u.Lane) {
+		return nil
+	}
+	w := s.walls[1-u.Side][u.Lane]
+	if w != nil && w.HP > 0 && absDist(u.X, w.X) <= maxRange {
+		return w
+	}
+	return nil
+}
+
 func (s *Sim) nearestEnemyTurret(u *Unit, maxRange float64) *Turret {
 	enemy := 1 - u.Side
 	var best *Turret
@@ -1670,6 +2028,11 @@ func (s *Sim) nearestEnemyDist(u *Unit) (float64, bool) {
 			if dd := absDist(u.X, t.X); dd < d {
 				d, found = dd, true
 			}
+		}
+	}
+	if w := s.walls[1-u.Side][u.Lane]; w != nil && w.HP > 0 {
+		if dd := absDist(u.X, w.X); dd < d {
+			d, found = dd, true
 		}
 	}
 	return d, found
@@ -1845,6 +2208,14 @@ func (s *Sim) removeDead() {
 					s.turrets[side][lane][slot] = nil
 					s.addEvent(side, "turretDestroyed", "%s tower in lane %d was destroyed! (+%dc)", sideName(side), lane+1, s.cfg.Turn.TowerKillBounty)
 				}
+			}
+			if w := s.walls[side][lane]; w != nil && w.HP <= 0 {
+				if killer := w.LastHitBy; killer == SideA || killer == SideB {
+					s.players[killer].Coins += 20
+					s.players[killer].BountyEarned += 20
+				}
+				s.walls[side][lane] = nil
+				s.addEvent(side, "wallDestroyed", "%s Reinforcement Wall in lane %d was breached! (+20c)", sideName(side), lane+1)
 			}
 		}
 	}

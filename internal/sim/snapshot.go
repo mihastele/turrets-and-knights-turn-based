@@ -22,9 +22,14 @@ type Snapshot struct {
 	Players        [2]PlayerSnapshot `json:"players"`
 	Units          []UnitSnapshot    `json:"units"`
 	Turrets        []TurretSnapshot  `json:"turrets"`
+	Walls          []WallSnapshot    `json:"walls"`
 	Caches         []CacheSnapshot   `json:"caches"`
 	Anomalies      []AnomalySnapshot `json:"anomalies"`
 	Burns          []BurnSnapshot    `json:"burns"`
+	HideLuck       bool              `json:"hideLuck"`
+	HiddenLuckCount int              `json:"hiddenLuckCount"`
+	LaneDominance  [NumLanes]int     `json:"laneDominance"`
+	ScoutedLanes   [NumLanes]bool    `json:"scoutedLanes"`
 	Events         []Event           `json:"events"`
 	Fx             []FxEvent         `json:"fx"`
 }
@@ -56,13 +61,27 @@ type CacheSnapshot struct {
 
 // AnomalySnapshot describes a random lane loot, shrine, neutral monster, or hazard.
 type AnomalySnapshot struct {
-	ID    int64   `json:"id"`
-	Kind  string  `json:"kind"` // "loot_coins" | "loot_buff" | "neutral_golem" | "hazard_fire" | "hazard_tar"
-	Lane  int     `json:"lane"`
-	X     float64 `json:"x"`
-	HP    float64 `json:"hp,omitempty"`
-	MaxHP float64 `json:"maxHp,omitempty"`
-	Value int     `json:"value,omitempty"`
+	ID        int64   `json:"id"`
+	Kind      string  `json:"kind"` // "loot_coins" | "loot_buff" | "neutral_golem" | "hazard_fire" | "hazard_tar" | "hazard_mud" | "hazard_spikes"
+	Lane      int     `json:"lane"`
+	X         float64 `json:"x"`
+	Radius    float64 `json:"radius,omitempty"`
+	Contested bool    `json:"contested,omitempty"`
+	HP        float64 `json:"hp,omitempty"`
+	MaxHP     float64 `json:"maxHp,omitempty"`
+	Value     int     `json:"value,omitempty"`
+}
+
+// WallSnapshot describes a lane reinforcement wall.
+type WallSnapshot struct {
+	Side      int     `json:"side"`
+	Lane      int     `json:"lane"`
+	X         float64 `json:"x"`
+	Level     int     `json:"level"`
+	HP        float64 `json:"hp"`
+	MaxHP     float64 `json:"maxHp"`
+	Shield    float64 `json:"shield"`
+	MaxShield float64 `json:"maxShield"`
 }
 
 // BurnSnapshot describes an active Dragon Fire field — a lane left ablaze.
@@ -156,8 +175,13 @@ func (s *Sim) buildSnapshot(viewerSide int, drain bool) Snapshot {
 		WinLane:        s.WinLane,
 		TimeLimit:      float64(s.cfg.Turn.MaxRounds),
 		OvertimeStart:  float64(s.cfg.Turn.EscalationStartRound),
+		HideLuck:       s.HideLuck,
+		LaneDominance:  s.laneDominance,
 		Events:         events,
 		Fx:             fx,
+	}
+	if viewerSide == SideA || viewerSide == SideB {
+		snap.ScoutedLanes = s.scoutedLanes[viewerSide]
 	}
 
 	hideEnemyPrep := s.Phase == PhasePrep && (viewerSide == SideA || viewerSide == SideB)
@@ -189,7 +213,7 @@ func (s *Sim) buildSnapshot(viewerSide int, drain bool) Snapshot {
 
 	snap.Units = make([]UnitSnapshot, 0, len(s.units))
 	for _, u := range s.units {
-		if hideEnemyPrep && u.Side != viewerSide {
+		if hideEnemyPrep && u.Side != viewerSide && !(validLane(u.Lane) && s.scoutedLanes[viewerSide][u.Lane]) {
 			continue
 		}
 		snap.Units = append(snap.Units, UnitSnapshot{
@@ -215,6 +239,18 @@ func (s *Sim) buildSnapshot(viewerSide int, drain bool) Snapshot {
 		}
 	}
 
+	snap.Walls = make([]WallSnapshot, 0, 2*NumLanes)
+	for side := 0; side < 2; side++ {
+		for lane := 0; lane < NumLanes; lane++ {
+			if w := s.walls[side][lane]; w != nil {
+				snap.Walls = append(snap.Walls, WallSnapshot{
+					Side: w.Side, Lane: w.Lane, X: w.X, Level: w.Level,
+					HP: w.HP, MaxHP: w.MaxHP, Shield: w.Shield, MaxShield: w.MaxShield,
+				})
+			}
+		}
+	}
+
 	snap.Caches = make([]CacheSnapshot, 0, len(s.caches))
 	for _, c := range s.caches {
 		snap.Caches = append(snap.Caches, CacheSnapshot{
@@ -224,8 +260,13 @@ func (s *Sim) buildSnapshot(viewerSide int, drain bool) Snapshot {
 
 	snap.Anomalies = make([]AnomalySnapshot, 0, len(s.anomalies))
 	for _, a := range s.anomalies {
+		if hideEnemyPrep && s.HideLuck && !(validLane(a.Lane) && s.scoutedLanes[viewerSide][a.Lane]) {
+			snap.HiddenLuckCount++
+			continue
+		}
 		snap.Anomalies = append(snap.Anomalies, AnomalySnapshot{
 			ID: a.ID, Kind: a.Kind, Lane: a.Lane, X: a.X,
+			Radius: a.Radius, Contested: a.Contested,
 			HP: a.HP, MaxHP: a.MaxHP, Value: a.Value,
 		})
 	}

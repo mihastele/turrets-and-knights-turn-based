@@ -326,3 +326,182 @@ func TestResignEndsMatch(t *testing.T) {
 		t.Fatalf("resign failed: finished=%v winner=%d draw=%v", s.Finished, s.Winner, s.Draw)
 	}
 }
+
+func TestReinforcementWallBuildUpgradeBlockAndRebuild(t *testing.T) {
+	s := newTestSim(t)
+	s.anomalies = nil
+	giveCoins(s, SideB, 500)
+	giveCoins(s, SideA, 500)
+
+	// Build a Wall for SideB in Lane 0
+	if err := s.ApplyAction(Action{Kind: ActionBuildWall, Side: SideB, Lane: 0}); err != nil {
+		t.Fatalf("build wall: %v", err)
+	}
+	w := s.walls[SideB][0]
+	if w == nil || w.HP != s.cfg.Wall.MaxHP || w.Shield != s.cfg.Wall.BaseShield {
+		t.Fatalf("unexpected wall state: %+v", w)
+	}
+
+	// Upgrade to Lv1 (thorns + extra HP/Shield)
+	if err := s.ApplyAction(Action{Kind: ActionUpgradeWall, Side: SideB, Lane: 0}); err != nil {
+		t.Fatalf("upgrade wall: %v", err)
+	}
+	if w.Level != 1 || w.MaxHP <= s.cfg.Wall.MaxHP || w.MaxShield <= s.cfg.Wall.BaseShield {
+		t.Fatalf("wall upgrade did not boost stats: %+v", w)
+	}
+
+	// Send a SideA Soldier right in front of SideB's wall
+	startCombat(t, s)
+	sol := &Unit{ID: 1, Type: Soldier, Side: SideA, Lane: 0, X: w.X - 1.0, HP: 75, MaxHP: 75, Damage: 10, TrackLevels: map[UpgradeTrack]int{}}
+	s.units = []*Unit{sol}
+	s.nextUnitID = 2
+
+	hpBefore := w.HP + w.Shield
+	solHPBefore := sol.HP
+	step(s, 1.5)
+	if w.HP+w.Shield >= hpBefore {
+		t.Fatal("soldier should damage enemy wall")
+	}
+	if sol.HP >= solHPBefore {
+		t.Fatal("upgraded wall thorns should damage melee attacker")
+	}
+	if sol.X > w.X {
+		t.Fatalf("ground soldier walked past alive enemy wall: sol.X=%v w.X=%v", sol.X, w.X)
+	}
+
+	// Destroy the wall and verify it can be rebuilt in the next Prep phase
+	w.Shield = 0
+	w.HP = 1
+	step(s, 1.5)
+	if s.walls[SideB][0] != nil {
+		t.Fatal("destroyed wall should be cleared")
+	}
+	step(s, s.cfg.Turn.CombatDuration)
+	if s.Phase != PhasePrep {
+		t.Fatalf("expected PhasePrep, got %s", s.Phase)
+	}
+	if err := s.ApplyAction(Action{Kind: ActionBuildWall, Side: SideB, Lane: 0}); err != nil {
+		t.Fatalf("rebuild wall after destruction: %v", err)
+	}
+	if s.walls[SideB][0] == nil {
+		t.Fatal("expected rebuilt wall in Lane 0")
+	}
+}
+
+func TestHideLuckConcealsAnomaliesInPrepUntilCombat(t *testing.T) {
+	s := newTestSim(t)
+	s.SetHideLuck(true)
+	if len(s.anomalies) == 0 {
+		t.Fatal("expected round anomalies to spawn")
+	}
+	snapPrep := s.SnapshotFor(SideA)
+	if !snapPrep.HideLuck {
+		t.Fatal("expected snap.HideLuck = true")
+	}
+	if len(snapPrep.Anomalies) != 0 {
+		t.Fatalf("expected 0 visible anomalies in Prep with HideLuck, got %d", len(snapPrep.Anomalies))
+	}
+	if snapPrep.HiddenLuckCount != len(s.anomalies) {
+		t.Fatalf("HiddenLuckCount = %d, want %d", snapPrep.HiddenLuckCount, len(s.anomalies))
+	}
+
+	startCombat(t, s)
+	snapCombat := s.SnapshotFor(SideA)
+	if len(snapCombat.Anomalies) != len(s.anomalies) {
+		t.Fatalf("expected all %d anomalies revealed in Combat, got %d", len(s.anomalies), len(snapCombat.Anomalies))
+	}
+}
+
+func TestGoldLootContestedAndUncontested(t *testing.T) {
+	// Case 1: Only one player has an army on the loot lane -> wins automatically
+	s1 := newTestSim(t)
+	clearTowers(s1)
+	s1.anomalies = []*Anomaly{{ID: 100, Kind: "loot_coins", Lane: 1, X: 50, Radius: 3.2, Value: 35}}
+	s1.units = []*Unit{{ID: 1, Type: Soldier, Side: SideA, Lane: 1, X: 10, HP: 75, MaxHP: 75, Damage: 10, TrackLevels: map[UpgradeTrack]int{}}}
+	s1.nextUnitID = 2
+	coinsA := coinBalance(s1, SideA)
+	startCombat(t, s1)
+	// End combat early before reaching X=50: SideA still wins uncontested gold loot
+	s1.endCombatPhase()
+	if coinBalance(s1, SideA) < coinsA+35 {
+		t.Fatalf("uncontested side should win gold loot; coins=%d, want >=%d", coinBalance(s1, SideA), coinsA+35)
+	}
+
+	// Case 2: Both players have armies on the loot lane -> contested until one side wins the fight
+	s2 := newTestSim(t)
+	clearTowers(s2)
+	s2.anomalies = []*Anomaly{{ID: 200, Kind: "loot_coins", Lane: 2, X: 50, Radius: 3.2, Value: 40}}
+	solA := &Unit{ID: 1, Type: Soldier, Side: SideA, Lane: 2, X: 49, HP: 200, MaxHP: 200, Damage: 25, TrackLevels: map[UpgradeTrack]int{}}
+	solB := &Unit{ID: 2, Type: Soldier, Side: SideB, Lane: 2, X: 51, HP: 20, MaxHP: 75, Damage: 5, TrackLevels: map[UpgradeTrack]int{}}
+	s2.units = []*Unit{solA, solB}
+	s2.nextUnitID = 3
+	startCombat(t, s2)
+	if !s2.anomalies[0].Contested {
+		t.Fatal("expected gold loot to be marked Contested when both sides are in lane")
+	}
+	coinsBeforeA := coinBalance(s2, SideA)
+	step(s2, 1.2) // SideA kills SideB's soldier and wins the lane fight
+	if len(s2.anomalies) != 0 {
+		t.Fatal("expected contested gold loot to be claimed once SideA won the lane fight")
+	}
+	if coinBalance(s2, SideA) < coinsBeforeA+40 {
+		t.Fatalf("expected SideA to receive +40c loot after winning lane fight, got +%d", coinBalance(s2, SideA)-coinsBeforeA)
+	}
+}
+
+func TestMudPileVariableSizeAndSpikeFieldDoT(t *testing.T) {
+	s := newTestSim(t)
+	clearTowers(s)
+	s.anomalies = []*Anomaly{
+		{ID: 1, Kind: "hazard_mud", Lane: 0, X: 50, Radius: 8.0},
+		{ID: 2, Kind: "hazard_spikes", Lane: 1, X: 50, Radius: 6.0, TickIn: 0.1},
+	}
+	if !s.inMudHazard(0, 43.0) || s.inMudHazard(0, 41.0) {
+		t.Fatal("inMudHazard should respect variable radius 8.0 around X=50")
+	}
+
+	startCombat(t, s)
+	ground := &Unit{ID: 10, Type: Soldier, Side: SideA, Lane: 1, X: 48, HP: 75, MaxHP: 75, Damage: 10, TrackLevels: map[UpgradeTrack]int{}}
+	flyer := &Unit{ID: 11, Type: Dragon, Side: SideA, Lane: 1, X: 48, HP: 240, MaxHP: 240, Damage: 26, TrackLevels: map[UpgradeTrack]int{}}
+	s.units = []*Unit{ground, flyer}
+	s.nextUnitID = 12
+
+	step(s, 0.5)
+	if ground.HP >= 75 {
+		t.Fatalf("spike field should damage ground unit over time, hp=%v", ground.HP)
+	}
+	if flyer.HP != 240 {
+		t.Fatalf("spike field should not damage flying unit, hp=%v", flyer.HP)
+	}
+}
+
+func TestMidfieldPillageAndScoutLane(t *testing.T) {
+	s := newTestSim(t)
+	s.SetHideLuck(true)
+	clearTowers(s)
+	s.anomalies = []*Anomaly{{ID: 1, Kind: "loot_buff", Lane: 3, X: 50, Value: 35}}
+
+	// Scout Lane 3 during Prep -> reveals hidden anomaly in Lane 3
+	if err := s.ApplyAction(Action{Kind: ActionScoutLane, Side: SideA, Lane: 3}); err != nil {
+		t.Fatalf("scout lane: %v", err)
+	}
+	snap := s.SnapshotFor(SideA)
+	if len(snap.Anomalies) != 1 || snap.Anomalies[0].Lane != 3 {
+		t.Fatalf("expected scouted lane 3 anomaly to be visible, got %+v", snap.Anomalies)
+	}
+
+	// Unit surviving past X=50 earns Midfield Pillage bonus at endCombatPhase
+	s.anomalies = nil
+	s.units = []*Unit{{ID: 1, Type: Soldier, Side: SideA, Lane: 0, X: 65, HP: 75, MaxHP: 75, Damage: 10, TrackLevels: map[UpgradeTrack]int{}}}
+	s.nextUnitID = 2
+	startCombat(t, s)
+	coinsBefore := coinBalance(s, SideA)
+	s.endCombatPhase()
+	expectedMin := coinsBefore + s.cfg.Turn.PillageBonus
+	if coinBalance(s, SideA) < expectedMin {
+		t.Fatalf("expected pillage bonus in coins; got %d, want >=%d", coinBalance(s, SideA), expectedMin)
+	}
+	if s.laneDominance[0] != SideA {
+		t.Fatalf("expected SideA to hold lane 0 dominance, got %d", s.laneDominance[0])
+	}
+}

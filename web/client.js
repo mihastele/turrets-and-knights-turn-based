@@ -21,7 +21,7 @@ const TRACKS = [
   { id: 'shield', label: '🛡️ Shield' },
   { id: 'special', label: '👑 Elite', couponOnly: true },
 ];
-const HOTKEYS = { '1': 'soldier', '2': 'bowman', '3': 'knight', '4': 'shieldbearer', '5': 'mage', '6': 'ram', '7': 'siege', 't': 'turret', 'f': 'factory' };
+const HOTKEYS = { '1': 'soldier', '2': 'bowman', '3': 'knight', '4': 'shieldbearer', '5': 'mage', '6': 'ram', '7': 'siege', 't': 'turret', 'w': 'wall', 's': 'scout', 'f': 'factory' };
 const COUPON_HOTKEYS = { '8': 'valkyrie', '9': 'dragon', '0': 'rockslide', '-': 'dragonfire', '=': 'warcry' };
 const LANE_H = FIELD.laneH;
 
@@ -920,12 +920,37 @@ function buildShop() {
   const turretBtn = document.createElement('button');
   turretBtn.className = 'shop-item';
   turretBtn.dataset.cost = b.turret.cost;
+  turretBtn.dataset.kind = 'turret';
   turretBtn.innerHTML =
     '<span class="si-key">T</span>' +
     '<div class="si-top"><span class="si-name">' + b.turret.name + '</span><span class="si-cost">' + b.turret.cost + 'c</span></div>' +
     '<div class="si-role">Two slots per lane. Blocks &amp; fires on ground troops.</div>';
   turretBtn.addEventListener('click', () => { SFX.click(); selectTurret(); });
   els.shop.appendChild(turretBtn);
+  if (b.wall) {
+    const wallBtn = document.createElement('button');
+    wallBtn.className = 'shop-item';
+    wallBtn.dataset.cost = b.wall.cost;
+    wallBtn.dataset.kind = 'wall';
+    wallBtn.innerHTML =
+      '<span class="si-key">W</span>' +
+      '<div class="si-top"><span class="si-name">🧱 ' + b.wall.name + '</span><span class="si-cost">' + b.wall.cost + 'c</span></div>' +
+      '<div class="si-role">High HP &amp; Shield barrier. Stalls raiders; upgradeable &amp; rebuildable.</div>';
+    wallBtn.addEventListener('click', () => { SFX.click(); selectWall(); });
+    els.shop.appendChild(wallBtn);
+  }
+  if (b.turn && b.turn.scoutCost) {
+    const scoutBtn = document.createElement('button');
+    scoutBtn.className = 'shop-item';
+    scoutBtn.dataset.cost = b.turn.scoutCost;
+    scoutBtn.dataset.kind = 'scout';
+    scoutBtn.innerHTML =
+      '<span class="si-key">S</span>' +
+      '<div class="si-top"><span class="si-name">🔭 Scout Flare</span><span class="si-cost">' + b.turn.scoutCost + 'c</span></div>' +
+      '<div class="si-role">Reveals hidden luck items &amp; enemy staging in 1 lane during Prep.</div>';
+    scoutBtn.addEventListener('click', () => { SFX.click(); selectScout(); });
+    els.shop.appendChild(scoutBtn);
+  }
   const fac = b.economy;
   const facBtn = document.createElement('button');
   facBtn.className = 'shop-item factory-item';
@@ -1006,13 +1031,26 @@ function buildUpgradePanels() {
           '<button class="tc-up-btn" data-track="special">' + (state.coupon ? '✈️ Flak' : '🔒 Flak') + '</button>' +
         '</div>';
     }
+    html +=
+      '<div class="tc-slot tc-wall">' +
+        '<div class="tc-slot-head"><span class="tc-tag">W</span><span class="tc-wall-level">—</span></div>' +
+        '<button class="tc-wall-btn">🧱 Build</button>' +
+      '</div>';
     cell.innerHTML = html;
-    cell.querySelectorAll('.tc-slot button').forEach((btn) => {
+    cell.querySelectorAll('.tc-slot[data-slot] button').forEach((btn) => {
       btn.addEventListener('click', () => {
         SFX.click();
         send({ type: 'upgradeTurret', lane, slot: Number(btn.closest('.tc-slot').dataset.slot), track: btn.dataset.track });
       });
     });
+    const wallBtn = cell.querySelector('.tc-wall-btn');
+    if (wallBtn) {
+      wallBtn.addEventListener('click', () => {
+        SFX.click();
+        const hasWall = (state.snapNow?.walls || []).some((w) => w.side === state.seat && w.lane === lane);
+        send({ type: hasWall ? 'upgradeWall' : 'wall', lane });
+      });
+    }
     els.turretUpgrades.appendChild(cell);
   }
 }
@@ -1089,9 +1127,11 @@ function updateTurretButtons(snap) {
   const turrets = snap.turrets || [];
   const myTurrets = {};
   turrets.forEach((t) => { if (t.side === state.seat) myTurrets[t.lane + ':' + (t.slot || 0)] = t; });
+  const myWalls = {};
+  (snap.walls || []).forEach((w) => { if (w.side === state.seat) myWalls[w.lane] = w; });
   els.turretUpgrades.querySelectorAll('.turret-cell').forEach((cell) => {
     const lane = Number(cell.dataset.lane);
-    cell.querySelectorAll('.tc-slot').forEach((slotEl) => {
+    cell.querySelectorAll('.tc-slot[data-slot]').forEach((slotEl) => {
       const slot = Number(slotEl.dataset.slot);
       const t = myTurrets[lane + ':' + slot];
       const lvlEl = slotEl.querySelector('.tc-level');
@@ -1125,6 +1165,29 @@ function updateTurretButtons(snap) {
         }
       });
     });
+    const wallEl = cell.querySelector('.tc-wall');
+    if (wallEl && b.wall) {
+      const w = myWalls[lane];
+      const lvlEl = wallEl.querySelector('.tc-wall-level');
+      const btn = wallEl.querySelector('.tc-wall-btn');
+      if (!w) {
+        wallEl.classList.add('empty');
+        lvlEl.textContent = '—';
+        btn.textContent = `🧱 ${b.wall.cost}c`;
+        btn.disabled = state.over || !isPrep || you.coins < b.wall.cost || snap.overtime;
+      } else if (w.level >= 2) {
+        wallEl.classList.remove('empty');
+        lvlEl.textContent = 'Lv3';
+        btn.textContent = 'MAX';
+        btn.disabled = true;
+      } else {
+        wallEl.classList.remove('empty');
+        lvlEl.textContent = `Lv${w.level + 1}`;
+        const cost = b.wall.upgradeCosts[w.level];
+        btn.textContent = `🧱 Lv${w.level + 2} · ${cost}c`;
+        btn.disabled = state.over || !isPrep || you.coins < cost || snap.overtime;
+      }
+    }
   });
   els.shop.querySelectorAll('[data-factory]').forEach((btn) => {
     const level = you.factoryLevel || 0;
@@ -1149,13 +1212,27 @@ function selectTurret() {
   highlightSelection();
   if (isCompact()) setSidebar(false);
 }
+function selectWall() {
+  if (coarsePointer && state.selection && state.selection.kind === 'wall') { clearSelection(); return; }
+  state.selection = { kind: 'wall' };
+  highlightSelection();
+  if (isCompact()) setSidebar(false);
+}
+function selectScout() {
+  if (coarsePointer && state.selection && state.selection.kind === 'scout') { clearSelection(); return; }
+  state.selection = { kind: 'scout' };
+  highlightSelection();
+  if (isCompact()) setSidebar(false);
+}
 function clearSelection() { state.selection = null; highlightSelection(); }
 function highlightSelection() {
   const sel = state.selection;
   els.shop.querySelectorAll('.shop-item').forEach((btn) => {
     const isUnit = sel && sel.kind === 'unit' && btn.dataset.unit === sel.unit;
-    const isTurret = sel && sel.kind === 'turret' && !btn.dataset.unit && !btn.dataset.factory;
-    btn.classList.toggle('selected', !!(isUnit || isTurret));
+    const isTurret = sel && sel.kind === 'turret' && btn.dataset.kind === 'turret';
+    const isWall = sel && sel.kind === 'wall' && btn.dataset.kind === 'wall';
+    const isScout = sel && sel.kind === 'scout' && btn.dataset.kind === 'scout';
+    btn.classList.toggle('selected', !!(isUnit || isTurret || isWall || isScout));
   });
   const isAbility = sel && sel.kind === 'ability';
   ABILITY_EFFECTS.forEach((effect) => {
@@ -1166,9 +1243,13 @@ function highlightSelection() {
   els.selHint.textContent = sel
     ? (sel.kind === 'turret'
         ? (coarsePointer ? 'Tap a lane to build in a free slot. Tap the turret again to cancel.' : 'Click a lane to build in a free turret slot. Right-click / Esc to cancel.')
-        : sel.kind === 'ability'
-          ? (coarsePointer ? `Tap a lane to cast ${abilityNames[sel.effect] || 'the effect'}. Tap the card again to cancel.` : `Click a lane to unleash ${abilityNames[sel.effect] || 'the effect'}. Right-click / Esc to cancel.`)
-          : (coarsePointer ? 'Tap a lane to deploy. Tap the item again to cancel.' : 'Click a lane to deploy. Right-click / Esc to cancel.'))
+        : sel.kind === 'wall'
+          ? 'Click a lane to build, upgrade, or rebuild a Reinforcement Wall. Right-click / Esc to cancel.'
+          : sel.kind === 'scout'
+            ? 'Click a lane to launch a Scout Flare (reveals hidden luck & staged enemies).'
+            : sel.kind === 'ability'
+              ? (coarsePointer ? `Tap a lane to cast ${abilityNames[sel.effect] || 'the effect'}. Tap the card again to cancel.` : `Click a lane to unleash ${abilityNames[sel.effect] || 'the effect'}. Right-click / Esc to cancel.`)
+              : (coarsePointer ? 'Tap a lane to deploy. Tap the item again to cancel.' : 'Click a lane to deploy. Right-click / Esc to cancel.'))
     : (coarsePointer ? 'Tap a unit, then tap a lane.' : 'Select a unit, then click a lane. Right-click / Esc to cancel.');
 }
 
@@ -1595,10 +1676,12 @@ function draw() {
   const snap = state.snapNow;
   if (snap) {
     drawPads(snap);
+    drawLaneDominance(snap);
     drawAnomalies(snap, now);
     drawCaches(snap, now);
     drawBurns(snap, now);
     drawTurrets(snap, now);
+    drawWalls(snap, now);
     drawUnits(snap, now);
     drawFogOfWar(snap);
     drawProjectiles();
@@ -1759,6 +1842,75 @@ function drawTurrets(snap, now) {
   }
 }
 
+function drawWalls(snap, now) {
+  for (const w of snap.walls || []) {
+    const x = px(w.x);
+    const y0 = FIELD.y0 + w.lane * LANE_H + 14;
+    const h = LANE_H - 28;
+    const dir = w.side === 0 ? 1 : -1;
+    const body = w.side === 0 ? '#1e40af' : '#9f1239';
+    const trim = w.side === 0 ? '#7dd3fc' : '#fda4af';
+
+    ctx.save();
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.38)';
+    roundRect(ctx, x - 9, y0 + 2, 18, h, 4); ctx.fill();
+    // Stone wall body
+    ctx.fillStyle = body;
+    roundRect(ctx, x - 7, y0, 14, h, 4); ctx.fill();
+    ctx.strokeStyle = trim;
+    ctx.lineWidth = 2;
+    roundRect(ctx, x - 7, y0, 14, h, 4); ctx.stroke();
+
+    // Crenellations / masonry bricks
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    for (let sy = y0 + 8; sy < y0 + h - 8; sy += 16) {
+      ctx.fillRect(x - 4, sy, 8, 6);
+    }
+    // Iron spikes if upgraded (level >= 1)
+    if (w.level > 0) {
+      ctx.fillStyle = w.level >= 2 ? '#fde047' : '#cbd5e1';
+      for (let sy = y0 + 10; sy < y0 + h - 6; sy += 14) {
+        ctx.beginPath();
+        ctx.moveTo(x + dir * 7, sy - 4);
+        ctx.lineTo(x + dir * (12 + w.level * 2), sy);
+        ctx.lineTo(x + dir * 7, sy + 4);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+
+    const midY = y0 + h / 2;
+    if (w.maxShield > 0) {
+      drawShieldBar(x - 16, midY + h / 2 + 2, 32, 3, w.shield / w.maxShield);
+    }
+    drawHealthBar(x - 16, midY + h / 2 + 6, 32, 4, w.hp / w.maxHp);
+  }
+}
+
+function drawLaneDominance(snap) {
+  const dom = snap.laneDominance || [];
+  const midX = (FIELD.x0 + FIELD.x1) / 2;
+  for (let lane = 0; lane < 5; lane++) {
+    const side = dom[lane];
+    if (side !== 0 && side !== 1) continue;
+    const y = FIELD.y0 + lane * LANE_H + 10;
+    ctx.save();
+    ctx.fillStyle = side === 0 ? 'rgba(56,189,248,0.85)' : 'rgba(251,113,133,0.85)';
+    ctx.beginPath();
+    ctx.moveTo(midX, y);
+    ctx.lineTo(midX + (side === 0 ? 12 : -12), y + 4);
+    ctx.lineTo(midX, y + 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(midX, y); ctx.lineTo(midX, y + 14); ctx.stroke();
+    ctx.restore();
+  }
+}
+
 function drawAnomalies(snap, now) {
   for (const a of snap.anomalies || []) {
     const x = px(a.x);
@@ -1766,14 +1918,18 @@ function drawAnomalies(snap, now) {
     const bob = Math.sin(now / 360 + a.lane) * 2.5;
     ctx.save();
     if (a.kind === 'loot_coins') {
-      ctx.fillStyle = 'rgba(251, 191, 36, 0.20)';
+      ctx.fillStyle = a.contested ? 'rgba(248, 113, 113, 0.25)' : 'rgba(251, 191, 36, 0.20)';
       ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#f59e0b';
       roundRect(ctx, x - 11, y - 9 + bob, 22, 18, 4); ctx.fill();
-      ctx.strokeStyle = '#fef08a'; ctx.lineWidth = 1.5;
+      ctx.strokeStyle = a.contested ? '#fca5a5' : '#fef08a'; ctx.lineWidth = 1.5;
       roundRect(ctx, x - 11, y - 9 + bob, 22, 18, 4); ctx.stroke();
       ctx.fillStyle = '#fffbeb'; ctx.font = '800 11px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
       ctx.fillText(`+${a.value}c`, x, y + 4 + bob);
+      if (a.contested) {
+        ctx.fillStyle = '#fca5a5'; ctx.font = '800 9px "Segoe UI", sans-serif';
+        ctx.fillText('⚔️ CONTESTED', x, y - 15 + bob);
+      }
     } else if (a.kind === 'loot_buff') {
       ctx.fillStyle = 'rgba(56, 189, 248, 0.20)';
       ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2); ctx.fill();
@@ -1805,6 +1961,26 @@ function drawAnomalies(snap, now) {
       ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)'; ctx.lineWidth = 1.5; ctx.stroke();
       ctx.fillStyle = '#cbd5e1'; ctx.font = '700 10px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
       ctx.fillText('🕸️ TAR', x, y + 4);
+    } else if (a.kind === 'hazard_mud') {
+      const rx = Math.max(24, ((a.radius || 5) / 100) * (FIELD.x1 - FIELD.x0));
+      ctx.fillStyle = 'rgba(92, 64, 51, 0.78)';
+      ctx.beginPath(); ctx.ellipse(x, y, rx, 26, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(161, 122, 91, 0.65)'; ctx.lineWidth = 1.6; ctx.stroke();
+      ctx.fillStyle = '#e7d5c3'; ctx.font = '700 10px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('🟤 MUD', x, y + 4);
+    } else if (a.kind === 'hazard_spikes') {
+      const rx = Math.max(24, ((a.radius || 5) / 100) * (FIELD.x1 - FIELD.x0));
+      ctx.fillStyle = 'rgba(127, 29, 29, 0.30)';
+      roundRect(ctx, x - rx, y - 22, rx * 2, 44, 8); ctx.fill();
+      ctx.strokeStyle = 'rgba(248, 113, 113, 0.6)'; ctx.lineWidth = 1.4;
+      roundRect(ctx, x - rx, y - 22, rx * 2, 44, 8); ctx.stroke();
+      ctx.fillStyle = '#cbd5e1';
+      const step = 12;
+      for (let sx = x - rx + 8; sx <= x + rx - 8; sx += step) {
+        ctx.beginPath(); ctx.moveTo(sx - 4, y + 10); ctx.lineTo(sx, y - 10); ctx.lineTo(sx + 4, y + 10); ctx.closePath(); ctx.fill();
+      }
+      ctx.fillStyle = '#fecaca'; ctx.font = '800 10px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('🩸 SPIKES', x, y + 20);
     }
     ctx.restore();
   }
@@ -1815,13 +1991,30 @@ function drawFogOfWar(snap) {
   const foeLeft = state.seat === 0;
   const xStart = foeLeft ? (FIELD.x0 + FIELD.x1) / 2 : FIELD.x0;
   const width = (FIELD.x1 - FIELD.x0) / 2;
+  const scouted = snap.scoutedLanes || [];
   ctx.save();
-  ctx.fillStyle = 'rgba(10, 15, 34, 0.52)';
-  ctx.fillRect(xStart, FIELD.y0, width, LANE_H * 5);
+  for (let lane = 0; lane < 5; lane++) {
+    const ly = FIELD.y0 + lane * LANE_H;
+    if (scouted[lane]) {
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+      ctx.font = '700 11px "Segoe UI", system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(125, 211, 252, 0.75)';
+      ctx.fillText('🔭 SCOUTED', xStart + width / 2, ly + 18);
+      continue;
+    }
+    ctx.fillStyle = 'rgba(10, 15, 34, 0.52)';
+    ctx.fillRect(xStart, ly, width, LANE_H);
+  }
   ctx.fillStyle = 'rgba(148, 163, 216, 0.55)';
   ctx.font = '700 14px "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('🌫️ FOG OF WAR — Enemy Preparing', xStart + width / 2, FIELD.y0 + LANE_H * 2.5);
+  if (snap.hideLuck && (snap.hiddenLuckCount || 0) > 0) {
+    ctx.fillStyle = 'rgba(251, 191, 36, 0.85)';
+    ctx.font = '700 12px "Segoe UI", system-ui, sans-serif';
+    ctx.fillText(`🎲 Luck Hidden (${snap.hiddenLuckCount} field item${snap.hiddenLuckCount > 1 ? 's' : ''} concealed until Combat)`, (FIELD.x0 + FIELD.x1) / 2, FIELD.y0 + 18);
+  }
   ctx.restore();
 }
 
@@ -2258,7 +2451,8 @@ async function onCreate() {
   els.lobbyError.textContent = '';
   SFX.click();
   try {
-    const res = await api('/api/rooms', { ...couponPayload(), lives: Number($('room-lives').value) });
+    const hideLuck = $('room-hide-luck') ? $('room-hide-luck').checked : true;
+    const res = await api('/api/rooms', { ...couponPayload(), lives: Number($('room-lives').value), hideLuck });
     await enterGame(res.code, res.token, res.seat);
   } catch (e) {
     els.lobbyError.textContent = e.message;
@@ -2491,6 +2685,13 @@ cv.addEventListener('click', (ev) => {
   } else if (state.selection.kind === 'turret') {
     SFX.build();
     send({ type: 'turret', lane });
+  } else if (state.selection.kind === 'wall') {
+    SFX.build();
+    const hasWall = (state.snapNow?.walls || []).some((w) => w.side === state.seat && w.lane === lane);
+    send({ type: hasWall ? 'upgradeWall' : 'wall', lane });
+  } else if (state.selection.kind === 'scout') {
+    SFX.click();
+    send({ type: 'scout', lane });
   } else if (state.selection.kind === 'ability') {
     SFX.click();
     send({ type: 'fieldEffect', effect: state.selection.effect, lane });
@@ -2538,6 +2739,8 @@ window.addEventListener('keydown', (ev) => {
   SFX.unlock();
   if (unit === 'factory') { send({ type: state.snapNow?.players[state.seat].factory ? 'upgradeFactory' : 'factory' }); return; }
   if (unit === 'turret') { selectTurret(); return; }
+  if (unit === 'wall') { selectWall(); return; }
+  if (unit === 'scout') { selectScout(); return; }
   SFX.click();
   selectUnit(unit);
 });

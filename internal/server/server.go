@@ -50,6 +50,7 @@ type wsConn struct {
 type room struct {
 	code      string
 	lives     int
+	hideLuck  bool
 	players   [2]*player
 	game      *sim.Sim
 	state     string // "waiting" | "playing" | "finished"
@@ -204,6 +205,7 @@ type lobbyIdentity struct {
 	playerID     string
 	coupons      []string
 	lives        int
+	hideLuck     bool
 	invalidLives bool
 }
 
@@ -223,6 +225,7 @@ func (s *Server) parseLobbyIdentity(r *http.Request) lobbyIdentity {
 		PlayerID string   `json:"playerId"`
 		Coupons  []string `json:"coupons"`
 		Lives    *int     `json:"lives"`
+		HideLuck *bool    `json:"hideLuck"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		id.invalidLives = true
@@ -233,6 +236,9 @@ func (s *Server) parseLobbyIdentity(r *http.Request) lobbyIdentity {
 	if raw.Lives != nil {
 		id.lives = *raw.Lives
 		id.invalidLives = id.lives < 1 || id.lives > 10
+	}
+	if raw.HideLuck != nil {
+		id.hideLuck = *raw.HideLuck
 	}
 	id.coupons = s.entitledCoupons(raw.Coupons)
 	return id
@@ -281,14 +287,16 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.rooms[code] = &room{
-		code:    code,
-		lives:   identity.lives,
-		players: [2]*player{{token: token, seat: 0, playerID: identity.playerID, coupons: identity.coupons}, nil},
-		game:    sim.New(randomSeed(), s.balance),
-		state:   "waiting",
-		created: time.Now(),
+		code:     code,
+		lives:    identity.lives,
+		hideLuck: identity.hideLuck,
+		players:  [2]*player{{token: token, seat: 0, playerID: identity.playerID, coupons: identity.coupons}, nil},
+		game:     sim.New(randomSeed(), s.balance),
+		state:    "waiting",
+		created:  time.Now(),
 	}
 	s.rooms[code].game.SetLives(identity.lives)
+	s.rooms[code].game.SetHideLuck(identity.hideLuck)
 	log.Printf("room %s created", code)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code": code, "token": token, "seat": 0, "side": "A",

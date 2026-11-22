@@ -232,6 +232,15 @@ func (s *Server) handleClientMsg(code string, pl *player, conn *wsConn, msg clie
 	case "turret":
 		action.Kind = sim.ActionBuildTurret
 		action.Lane = msg.Lane
+	case "wall":
+		action.Kind = sim.ActionBuildWall
+		action.Lane = msg.Lane
+	case "upgradeWall":
+		action.Kind = sim.ActionUpgradeWall
+		action.Lane = msg.Lane
+	case "scout":
+		action.Kind = sim.ActionScoutLane
+		action.Lane = msg.Lane
 	case "factory":
 		action.Kind = sim.ActionBuildFactory
 	case "upgradeFactory":
@@ -387,6 +396,7 @@ func (s *Server) tryStartLocked(rm *room) {
 	if rematch {
 		rm.game = sim.New(randomSeed(), s.balance)
 		rm.game.SetLives(rm.lives)
+		rm.game.SetHideLuck(rm.hideLuck)
 		rm.snapEvery = 0
 		rm.rematch = [2]bool{}
 	}

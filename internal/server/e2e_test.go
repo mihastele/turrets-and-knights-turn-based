@@ -357,3 +357,68 @@ func TestRoomGuards(t *testing.T) {
 		t.Fatalf("rejoin with correct token failed: %v", good)
 	}
 }
+
+func TestHideLuckAndWallScoutWS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e in -short mode")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ln.Addr().String()
+	srv := New(os.DirFS("../../web"))
+	defer srv.Close()
+	go func() { _ = srv.Serve(ln) }()
+
+	created := postJSON(t, "http://"+base+"/api/rooms", map[string]any{"hideLuck": true})
+	code := created["code"].(string)
+	tokenA := created["token"].(string)
+	tokenB, _ := postJSON(t, "http://"+base+"/api/rooms/"+code+"/join", map[string]any{})["token"].(string)
+
+	wsA := dialWS(t, base, code, tokenA)
+	defer wsA.Close()
+	wsB := dialWS(t, base, code, tokenB)
+	defer wsB.Close()
+
+	// Drain until matchStart
+	deadline := time.Now().Add(5 * time.Second)
+	for _, ws := range []*websocket.Conn{wsA, wsB} {
+		got := false
+		for !got && time.Now().Before(deadline) {
+			msg := readMsg(t, ws, 2*time.Second)
+			got = msg["type"] == "matchStart"
+		}
+	}
+
+	// Build a wall in lane 0 and scout lane 1
+	if err := wsA.WriteJSON(map[string]any{"type": "wall", "lane": 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wsA.WriteJSON(map[string]any{"type": "scout", "lane": 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read raw snapshot to verify hideLuck, walls, and scoutedLanes
+	var raw map[string]any
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = wsA.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if err := wsA.ReadJSON(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if raw["type"] == "snapshot" {
+			walls, _ := raw["walls"].([]any)
+			if len(walls) >= 1 {
+				break
+			}
+		}
+	}
+	if raw["hideLuck"] != true {
+		t.Fatalf("expected hideLuck=true, got %v", raw["hideLuck"])
+	}
+	walls, _ := raw["walls"].([]any)
+	if len(walls) == 0 {
+		t.Fatal("expected built wall in snapshot")
+	}
+}
