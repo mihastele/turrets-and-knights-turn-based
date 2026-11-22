@@ -21,8 +21,9 @@ type Snapshot struct {
 	OvertimeStart  float64           `json:"overtimeStart"`
 	Players        [2]PlayerSnapshot `json:"players"`
 	Units          []UnitSnapshot    `json:"units"`
-	Turrets        []TurretSnapshot  `json:"turrets"`
-	Walls          []WallSnapshot    `json:"walls"`
+	Turrets        []TurretSnapshot      `json:"turrets"`
+	TowerShields   []TowerShieldSnapshot `json:"towerShields"`
+	Walls          []WallSnapshot        `json:"walls"`
 	Caches         []CacheSnapshot   `json:"caches"`
 	Anomalies      []AnomalySnapshot `json:"anomalies"`
 	Burns          []BurnSnapshot    `json:"burns"`
@@ -70,6 +71,17 @@ type AnomalySnapshot struct {
 	HP        float64 `json:"hp,omitempty"`
 	MaxHP     float64 `json:"maxHp,omitempty"`
 	Value     int     `json:"value,omitempty"`
+}
+
+// TowerShieldSnapshot describes a pre-built shield standing in front of a tower.
+type TowerShieldSnapshot struct {
+	Side      int     `json:"side"`
+	Lane      int     `json:"lane"`
+	X         float64 `json:"x"`
+	HP        float64 `json:"hp"`
+	MaxHP     float64 `json:"maxHp"`
+	Shield    float64 `json:"shield"`
+	MaxShield float64 `json:"maxShield"`
 }
 
 // WallSnapshot describes a lane reinforcement wall.
@@ -235,6 +247,18 @@ func (s *Sim) buildSnapshot(viewerSide int, drain bool) Snapshot {
 						Damage: t.Damage, TrackLevels: copyTrackMap(t.TrackLevels),
 					})
 				}
+			}
+		}
+	}
+
+	snap.TowerShields = make([]TowerShieldSnapshot, 0, 2*NumLanes)
+	for side := 0; side < 2; side++ {
+		for lane := 0; lane < NumLanes; lane++ {
+			if ts := s.towerShields[side][lane]; ts != nil {
+				snap.TowerShields = append(snap.TowerShields, TowerShieldSnapshot{
+					Side: ts.Side, Lane: ts.Lane, X: ts.X,
+					HP: ts.HP, MaxHP: ts.MaxHP, Shield: ts.Shield, MaxShield: ts.MaxShield,
+				})
 			}
 		}
 	}

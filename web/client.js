@@ -728,7 +728,7 @@ function updateClock(snap) {
   els.clock.textContent = `${mm}:${ss}`;
   els.clock.classList.toggle('overtime', !!snap.overtime);
   if (els.roundBadge) {
-    els.roundBadge.textContent = `ROUND ${snap.round || 1}/${snap.maxRounds || 10}`;
+    els.roundBadge.textContent = `ROUND ${snap.round || 1}/${snap.maxRounds || 30}`;
   }
   const isPrep = snap.phase === 'prep';
   els.phase.textContent = isPrep ? 'PREP PHASE' : 'COMBAT';
@@ -1681,6 +1681,7 @@ function draw() {
     drawCaches(snap, now);
     drawBurns(snap, now);
     drawTurrets(snap, now);
+    drawTowerShields(snap, now);
     drawWalls(snap, now);
     drawUnits(snap, now);
     drawFogOfWar(snap);
@@ -1886,6 +1887,49 @@ function drawWalls(snap, now) {
       drawShieldBar(x - 16, midY + h / 2 + 2, 32, 3, w.shield / w.maxShield);
     }
     drawHealthBar(x - 16, midY + h / 2 + 6, 32, 4, w.hp / w.maxHp);
+  }
+}
+
+function drawTowerShields(snap, now) {
+  for (const sh of snap.towerShields || []) {
+    const x = px(sh.x);
+    const y0 = FIELD.y0 + sh.lane * LANE_H + 18;
+    const h = LANE_H - 36;
+    const midY = y0 + h / 2;
+    const dir = sh.side === 0 ? 1 : -1;
+    const hasEnergy = sh.shield > 0;
+    const fill = sh.side === 0 ? 'rgba(56,189,248,0.28)' : 'rgba(251,113,133,0.28)';
+    const stroke = sh.side === 0 ? (hasEnergy ? '#38bdf8' : '#1d4ed8') : (hasEnergy ? '#fb7185' : '#be123c');
+
+    ctx.save();
+    // Subtle outer glow when shield energy is active
+    if (hasEnergy) {
+      ctx.strokeStyle = sh.side === 0 ? 'rgba(56,189,248,0.35)' : 'rgba(251,113,133,0.35)';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(x - dir * 2, y0);
+      ctx.quadraticCurveTo(x + dir * 7, midY, x - dir * 2, y0 + h);
+      ctx.stroke();
+    }
+
+    // Curved energy/palisade shield plate facing the enemy
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(x - dir * 2, y0);
+    ctx.quadraticCurveTo(x + dir * 7, midY, x - dir * 2, y0 + h);
+    ctx.lineTo(x - dir * 5, y0 + h - 3);
+    ctx.quadraticCurveTo(x + dir * 3, midY, x - dir * 5, y0 + 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    if (sh.maxShield > 0) {
+      drawShieldBar(x - 13, y0 + h + 2, 26, 3, sh.shield / sh.maxShield);
+    }
+    drawHealthBar(x - 13, y0 + h + 6, 26, 4, sh.hp / sh.maxHp);
   }
 }
 

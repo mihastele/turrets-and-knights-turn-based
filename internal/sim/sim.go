@@ -139,6 +139,18 @@ type Cache struct {
 	ExpiresAt float64 `json:"expiresAt"`
 }
 
+// TowerShield is a pre-built weaker defensive barrier standing just in front of a lane's protective tower.
+type TowerShield struct {
+	Side      int     `json:"side"`
+	Lane      int     `json:"lane"`
+	X         float64 `json:"x"`
+	HP        float64 `json:"hp"`
+	MaxHP     float64 `json:"maxHp"`
+	Shield    float64 `json:"shield"`
+	MaxShield float64 `json:"maxShield"`
+	LastHitBy int     `json:"-"`
+}
+
 // Wall is a buildable, upgradeable, and rebuildable defensive barrier in a lane.
 type Wall struct {
 	Side      int     `json:"side"`
@@ -269,10 +281,11 @@ type Sim struct {
 	Ready          [2]bool   `json:"ready"`
 	combatElapsed  float64
 
-	units   []*Unit
-	turrets [2][NumLanes][TurretSlots]*Turret
-	walls   [2][NumLanes]*Wall
-	players [2]Player
+	units        []*Unit
+	turrets      [2][NumLanes][TurretSlots]*Turret
+	towerShields [2][NumLanes]*TowerShield
+	walls        [2][NumLanes]*Wall
+	players      [2]Player
 
 	HideLuck         bool `json:"hideLuck"`
 	scoutedLanes     [2][NumLanes]bool
@@ -328,15 +341,17 @@ func New(seed int64, cfg Balance) *Sim {
 		s.laneDominance[lane] = NoSide
 	}
 
-	// Place initial protective towers in every lane for both sides.
+	// Place initial protective towers and weaker front shields in every lane for both sides.
 	initialSlots := cfg.Turn.InitialTowersPerLane
 	if initialSlots > TurretSlots {
 		initialSlots = TurretSlots
 	}
 	for side := 0; side < 2; side++ {
 		x := cfg.Turret.PadX
+		shieldX := cfg.TowerShield.PadX
 		if side == SideB {
 			x = FieldLength - cfg.Turret.PadX
+			shieldX = FieldLength - cfg.TowerShield.PadX
 		}
 		for lane := 0; lane < NumLanes; lane++ {
 			for slot := 0; slot < initialSlots; slot++ {
@@ -353,6 +368,18 @@ func New(seed int64, cfg Balance) *Sim {
 					Damage:      cfg.Turret.Damage,
 					LastHitBy:   -1,
 					TrackLevels: map[UpgradeTrack]int{},
+				}
+			}
+			if cfg.Turn.InitialShieldsPerLane > 0 && cfg.TowerShield.MaxHP > 0 {
+				s.towerShields[side][lane] = &TowerShield{
+					Side:      side,
+					Lane:      lane,
+					X:         shieldX,
+					HP:        cfg.TowerShield.MaxHP,
+					MaxHP:     cfg.TowerShield.MaxHP,
+					Shield:    cfg.TowerShield.BaseShield,
+					MaxShield: cfg.TowerShield.BaseShield,
+					LastHitBy: -1,
 				}
 			}
 		}
@@ -1067,9 +1094,17 @@ func sideName(side int) string {
 // Turn Transitions & Anomalies
 // ---------------------------------------------------------------------------
 
+func (s *Sim) roundCombatDuration() float64 {
+	step := s.cfg.Turn.CombatDurationStep
+	if step <= 0 || s.Round <= 1 {
+		return s.cfg.Turn.CombatDuration
+	}
+	return s.cfg.Turn.CombatDuration + float64(s.Round-1)*step
+}
+
 func (s *Sim) startCombatPhase() {
 	s.Phase = PhaseCombat
-	s.PhaseRemaining = s.cfg.Turn.CombatDuration
+	s.PhaseRemaining = s.roundCombatDuration()
 	s.Ready = [2]bool{}
 	s.combatElapsed = 0
 	s.laneParticipated = [2][NumLanes]bool{}
@@ -1152,13 +1187,16 @@ func (s *Sim) endCombatPhase() {
 	s.scoutedLanes = [2][NumLanes]bool{}
 	s.laneParticipated = [2][NumLanes]bool{}
 
-	// Recharge turret and wall shields between rounds
+	// Recharge turret, tower shield, and wall shields between rounds
 	for side := 0; side < 2; side++ {
 		for lane := 0; lane < NumLanes; lane++ {
 			for slot := 0; slot < TurretSlots; slot++ {
 				if t := s.turrets[side][lane][slot]; t != nil {
 					t.Shield = t.MaxShield
 				}
+			}
+			if ts := s.towerShields[side][lane]; ts != nil {
+				ts.Shield = ts.MaxShield
 			}
 			if w := s.walls[side][lane]; w != nil {
 				w.Shield = w.MaxShield
@@ -1574,54 +1612,20 @@ func (s *Sim) dealDamage(attackerSide int, target any, dmg float64, shieldMult f
 		}
 	case *Turret:
 		armor := float64(t.TrackLevels[TrackShield]) * 1.5
-		effDmg := math.Max(1.0, dmg-armor)
-		dealt := 0.0
-		if t.Shield > 0 {
-			shieldDmg := effDmg * shieldMult
-			if shieldDmg >= t.Shield {
-				usedRatio := t.Shield / shieldDmg
-				dealt += t.Shield
-				t.Shield = 0
-				remDmg := effDmg * (1.0 - usedRatio)
-				hpDmg := math.Min(t.HP, remDmg)
-				t.HP -= hpDmg
-				dealt += hpDmg
-			} else {
-				t.Shield -= shieldDmg
-				dealt += shieldDmg
-			}
-		} else {
-			hpDmg := math.Min(t.HP, effDmg)
-			t.HP -= hpDmg
-			dealt += hpDmg
+		dealt := applyShieldedDamage(&t.HP, &t.Shield, dmg, shieldMult, armor)
+		if attackerSide == SideA || attackerSide == SideB {
+			s.players[attackerSide].DamageDealt += dealt
+			t.LastHitBy = attackerSide
 		}
+	case *TowerShield:
+		dealt := applyShieldedDamage(&t.HP, &t.Shield, dmg, shieldMult, 0)
 		if attackerSide == SideA || attackerSide == SideB {
 			s.players[attackerSide].DamageDealt += dealt
 			t.LastHitBy = attackerSide
 		}
 	case *Wall:
 		armor := float64(t.Level) * 2.0
-		effDmg := math.Max(1.0, dmg-armor)
-		dealt := 0.0
-		if t.Shield > 0 {
-			shieldDmg := effDmg * shieldMult
-			if shieldDmg >= t.Shield {
-				usedRatio := t.Shield / shieldDmg
-				dealt += t.Shield
-				t.Shield = 0
-				remDmg := effDmg * (1.0 - usedRatio)
-				hpDmg := math.Min(t.HP, remDmg)
-				t.HP -= hpDmg
-				dealt += hpDmg
-			} else {
-				t.Shield -= shieldDmg
-				dealt += shieldDmg
-			}
-		} else {
-			hpDmg := math.Min(t.HP, effDmg)
-			t.HP -= hpDmg
-			dealt += hpDmg
-		}
+		dealt := applyShieldedDamage(&t.HP, &t.Shield, dmg, shieldMult, armor)
 		if attackerSide == SideA || attackerSide == SideB {
 			s.players[attackerSide].DamageDealt += dealt
 			t.LastHitBy = attackerSide
@@ -1634,6 +1638,31 @@ func (s *Sim) dealDamage(attackerSide int, target any, dmg float64, shieldMult f
 			t.LastHitBy = attackerSide
 		}
 	}
+}
+
+func applyShieldedDamage(hp, shield *float64, dmg, shieldMult, armor float64) float64 {
+	effDmg := math.Max(1.0, dmg-armor)
+	dealt := 0.0
+	if *shield > 0 {
+		shieldDmg := effDmg * shieldMult
+		if shieldDmg >= *shield {
+			usedRatio := *shield / shieldDmg
+			dealt += *shield
+			*shield = 0
+			remDmg := effDmg * (1.0 - usedRatio)
+			hpDmg := math.Min(*hp, remDmg)
+			*hp -= hpDmg
+			dealt += hpDmg
+		} else {
+			*shield -= shieldDmg
+			dealt += shieldDmg
+		}
+	} else {
+		hpDmg := math.Min(*hp, effDmg)
+		*hp -= hpDmg
+		dealt += hpDmg
+	}
+	return dealt
 }
 
 func direction(side int) float64 {
@@ -1756,20 +1785,15 @@ func (s *Sim) stepUnits(dt float64) {
 
 		case *Turret:
 			if u.Cooldown <= 0 {
-				dmg := u.Damage * s.counterMultiplier(u.Type, ClassStructure, u.TrackLevels)
-				if ub.VsTurretDamage > 0 {
-					dmgLvl := u.TrackLevels[TrackDamage]
-					mul := 1 + float64(dmgLvl)*ub.UpgradeDamage
-					if u.Type == Ram && u.TrackLevels[TrackSpecial] > 0 {
-						mul *= 1.40
-					} else if u.Type == Siege && u.TrackLevels[TrackSpecial] > 0 {
-						mul *= 1.35
-					}
-					if s.Round >= s.cfg.Turn.EscalationStartRound {
-						mul *= (1.0 + float64(s.Round-s.cfg.Turn.EscalationStartRound+1)*0.20)
-					}
-					dmg = ub.VsTurretDamage * mul
-				}
+				dmg := s.structureAttackDamage(u)
+				s.dealDamage(u.Side, t, dmg, shieldMult)
+				u.Cooldown = ub.AttackInterval
+				s.emitAttackFx(u, t.X)
+			}
+
+		case *TowerShield:
+			if u.Cooldown <= 0 {
+				dmg := s.structureAttackDamage(u)
 				s.dealDamage(u.Side, t, dmg, shieldMult)
 				u.Cooldown = ub.AttackInterval
 				s.emitAttackFx(u, t.X)
@@ -1777,20 +1801,7 @@ func (s *Sim) stepUnits(dt float64) {
 
 		case *Wall:
 			if u.Cooldown <= 0 {
-				dmg := u.Damage * s.counterMultiplier(u.Type, ClassStructure, u.TrackLevels)
-				if ub.VsTurretDamage > 0 {
-					dmgLvl := u.TrackLevels[TrackDamage]
-					mul := 1 + float64(dmgLvl)*ub.UpgradeDamage
-					if u.Type == Ram && u.TrackLevels[TrackSpecial] > 0 {
-						mul *= 1.40
-					} else if u.Type == Siege && u.TrackLevels[TrackSpecial] > 0 {
-						mul *= 1.35
-					}
-					if s.Round >= s.cfg.Turn.EscalationStartRound {
-						mul *= (1.0 + float64(s.Round-s.cfg.Turn.EscalationStartRound+1)*0.20)
-					}
-					dmg = ub.VsTurretDamage * mul
-				}
+				dmg := s.structureAttackDamage(u)
 				s.dealDamage(u.Side, t, dmg, shieldMult)
 				if t.Level > 0 && !ub.Flying && ub.Range <= 4.0 && s.cfg.Wall.ThornDamage > 0 {
 					s.dealDamage(t.Side, u, s.cfg.Wall.ThornDamage*float64(t.Level), 1.0)
@@ -1816,9 +1827,16 @@ func (s *Sim) stepUnits(dt float64) {
 			stepDist := moveSpeed * dt
 			nextX := u.X + direction(u.Side)*stepDist
 
-			// Ground units cannot walk past an alive enemy wall or protective tower in their lane
+			// Ground units cannot walk past an alive enemy wall, tower shield, or protective tower in their lane
 			if !ub.Flying {
 				if blockX, blocked := s.enemyWallBlockX(u.Side, u.Lane); blocked {
+					if u.Side == SideA && nextX > blockX-1.5 {
+						nextX = math.Max(u.X, blockX-1.5)
+					} else if u.Side == SideB && nextX < blockX+1.5 {
+						nextX = math.Min(u.X, blockX+1.5)
+					}
+				}
+				if blockX, blocked := s.enemyTowerShieldBlockX(u.Side, u.Lane); blocked {
 					if u.Side == SideA && nextX > blockX-1.5 {
 						nextX = math.Max(u.X, blockX-1.5)
 					} else if u.Side == SideB && nextX < blockX+1.5 {
@@ -1868,11 +1886,40 @@ func (s *Sim) inMudHazard(lane int, x float64) bool {
 	return false
 }
 
+func (s *Sim) structureAttackDamage(u *Unit) float64 {
+	ub := s.cfg.Units[u.Type]
+	dmg := u.Damage * s.counterMultiplier(u.Type, ClassStructure, u.TrackLevels)
+	if ub.VsTurretDamage > 0 {
+		dmgLvl := u.TrackLevels[TrackDamage]
+		mul := 1 + float64(dmgLvl)*ub.UpgradeDamage
+		if u.Type == Ram && u.TrackLevels[TrackSpecial] > 0 {
+			mul *= 1.40
+		} else if u.Type == Siege && u.TrackLevels[TrackSpecial] > 0 {
+			mul *= 1.35
+		}
+		if s.Round >= s.cfg.Turn.EscalationStartRound {
+			mul *= (1.0 + float64(s.Round-s.cfg.Turn.EscalationStartRound+1)*0.20)
+		}
+		dmg = ub.VsTurretDamage * mul
+	}
+	return dmg
+}
+
 func (s *Sim) enemyWallBlockX(side, lane int) (float64, bool) {
 	enemy := 1 - side
 	if validLane(lane) {
 		if w := s.walls[enemy][lane]; w != nil && w.HP > 0 {
 			return w.X, true
+		}
+	}
+	return 0, false
+}
+
+func (s *Sim) enemyTowerShieldBlockX(side, lane int) (float64, bool) {
+	enemy := 1 - side
+	if validLane(lane) {
+		if ts := s.towerShields[enemy][lane]; ts != nil && ts.HP > 0 {
+			return ts.X, true
 		}
 	}
 	return 0, false
@@ -1891,10 +1938,13 @@ func (s *Sim) enemyTurretBlockX(side, lane int) (float64, bool) {
 func (s *Sim) findTarget(u *Unit) any {
 	ub := s.cfg.Units[u.Type]
 
-	// Rams prioritize enemy walls & turrets when in range
+	// Rams prioritize enemy walls, tower shields & turrets when in range
 	if u.Type == Ram {
 		if w := s.nearestEnemyWall(u, ub.Range); w != nil {
 			return w
+		}
+		if ts := s.nearestEnemyTowerShield(u, ub.Range); ts != nil {
+			return ts
 		}
 		if tr := s.nearestEnemyTurret(u, ub.Range); tr != nil {
 			return tr
@@ -1909,6 +1959,9 @@ func (s *Sim) findTarget(u *Unit) any {
 		if w := s.nearestEnemyWall(u, ub.Range); w != nil && absDist(u.X, w.X) >= ub.MinRange {
 			return w
 		}
+		if ts := s.nearestEnemyTowerShield(u, ub.Range); ts != nil && absDist(u.X, ts.X) >= ub.MinRange {
+			return ts
+		}
 		if tr := s.nearestEnemyTurret(u, ub.Range); tr != nil && absDist(u.X, tr.X) >= ub.MinRange {
 			return tr
 		}
@@ -1918,7 +1971,7 @@ func (s *Sim) findTarget(u *Unit) any {
 		return nil
 	}
 
-	// Standard troops: fight enemy units -> neutral golems -> enemy walls -> enemy towers
+	// Standard troops: fight enemy units -> neutral golems -> enemy walls -> enemy tower shields -> enemy towers
 	if eu := s.nearestEnemyUnit(u, ub.Range); eu != nil {
 		return eu
 	}
@@ -1927,6 +1980,9 @@ func (s *Sim) findTarget(u *Unit) any {
 	}
 	if w := s.nearestEnemyWall(u, ub.Range); w != nil {
 		return w
+	}
+	if ts := s.nearestEnemyTowerShield(u, ub.Range); ts != nil {
+		return ts
 	}
 	if tr := s.nearestEnemyTurret(u, ub.Range); tr != nil {
 		return tr
@@ -1989,6 +2045,17 @@ func (s *Sim) nearestEnemyWall(u *Unit, maxRange float64) *Wall {
 	w := s.walls[1-u.Side][u.Lane]
 	if w != nil && w.HP > 0 && absDist(u.X, w.X) <= maxRange {
 		return w
+	}
+	return nil
+}
+
+func (s *Sim) nearestEnemyTowerShield(u *Unit, maxRange float64) *TowerShield {
+	if !validLane(u.Lane) {
+		return nil
+	}
+	ts := s.towerShields[1-u.Side][u.Lane]
+	if ts != nil && ts.HP > 0 && absDist(u.X, ts.X) <= maxRange {
+		return ts
 	}
 	return nil
 }
@@ -2208,6 +2275,14 @@ func (s *Sim) removeDead() {
 					s.turrets[side][lane][slot] = nil
 					s.addEvent(side, "turretDestroyed", "%s tower in lane %d was destroyed! (+%dc)", sideName(side), lane+1, s.cfg.Turn.TowerKillBounty)
 				}
+			}
+			if ts := s.towerShields[side][lane]; ts != nil && ts.HP <= 0 {
+				if killer := ts.LastHitBy; killer == SideA || killer == SideB {
+					s.players[killer].Coins += 15
+					s.players[killer].BountyEarned += 15
+				}
+				s.towerShields[side][lane] = nil
+				s.addEvent(side, "wallDestroyed", "%s Tower Shield in lane %d was shattered! (+15c)", sideName(side), lane+1)
 			}
 			if w := s.walls[side][lane]; w != nil && w.HP <= 0 {
 				if killer := w.LastHitBy; killer == SideA || killer == SideB {

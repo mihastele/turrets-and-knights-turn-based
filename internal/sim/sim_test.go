@@ -40,6 +40,7 @@ func startCombat(t *testing.T, s *Sim) {
 func clearTowers(s *Sim) {
 	for side := 0; side < 2; side++ {
 		for lane := 0; lane < NumLanes; lane++ {
+			s.towerShields[side][lane] = nil
 			for slot := 0; slot < TurretSlots; slot++ {
 				s.turrets[side][lane][slot] = nil
 			}
@@ -229,6 +230,7 @@ func TestCounterDamageMatrixAndKillBounty(t *testing.T) {
 func TestTowerBlocksGroundUnitAndAllUnitsAttackTowers(t *testing.T) {
 	s := newTestSim(t)
 	s.anomalies = nil
+	s.towerShields[SideB][0] = nil
 	startCombat(t, s)
 
 	// Place a Soldier right in front of SideB's initial tower at X=90
@@ -503,5 +505,114 @@ func TestMidfieldPillageAndScoutLane(t *testing.T) {
 	}
 	if s.laneDominance[0] != SideA {
 		t.Fatalf("expected SideA to hold lane 0 dominance, got %d", s.laneDominance[0])
+	}
+}
+
+func TestMaxRoundsAndScalingCombatDuration(t *testing.T) {
+	s := newTestSim(t)
+	if s.cfg.Turn.MaxRounds != 30 {
+		t.Fatalf("MaxRounds = %d, want 30", s.cfg.Turn.MaxRounds)
+	}
+	if s.cfg.Turn.CombatDuration != 27 {
+		t.Fatalf("CombatDuration = %v, want 27", s.cfg.Turn.CombatDuration)
+	}
+	if s.cfg.Turn.CombatDurationStep != 1 {
+		t.Fatalf("CombatDurationStep = %v, want 1", s.cfg.Turn.CombatDurationStep)
+	}
+
+	keepAlive := func() {
+		s.anomalies = nil
+		s.units = []*Unit{
+			{ID: 1, Type: Soldier, Side: SideA, Lane: 0, X: 48, HP: 10000, MaxHP: 10000, Damage: 0, TrackLevels: map[UpgradeTrack]int{}},
+			{ID: 2, Type: Shieldbearer, Side: SideB, Lane: 0, X: 52, HP: 10000, MaxHP: 10000, Damage: 0, TrackLevels: map[UpgradeTrack]int{}},
+		}
+		s.nextUnitID = 3
+	}
+
+	// Round 1 combat lasts 27s
+	keepAlive()
+	startCombat(t, s)
+	if s.PhaseRemaining != 27 {
+		t.Fatalf("Round 1 PhaseRemaining = %v, want 27", s.PhaseRemaining)
+	}
+	step(s, 26.5)
+	if s.Phase != PhaseCombat || s.Round != 1 {
+		t.Fatalf("expected Round 1 Combat to still be active at 26.5s, got R%d %s", s.Round, s.Phase)
+	}
+	step(s, 0.7)
+	if s.Phase != PhasePrep || s.Round != 2 {
+		t.Fatalf("expected Round 2 Prep after 27s combat, got R%d %s", s.Round, s.Phase)
+	}
+
+	// Round 2 combat lasts 28s
+	keepAlive()
+	startCombat(t, s)
+	if s.PhaseRemaining != 28 {
+		t.Fatalf("Round 2 PhaseRemaining = %v, want 28", s.PhaseRemaining)
+	}
+	step(s, 27.5)
+	if s.Phase != PhaseCombat || s.Round != 2 {
+		t.Fatalf("expected Round 2 Combat to still be active at 27.5s, got R%d %s", s.Round, s.Phase)
+	}
+	step(s, 0.7)
+	if s.Phase != PhasePrep || s.Round != 3 {
+		t.Fatalf("expected Round 3 Prep after 28s combat, got R%d %s", s.Round, s.Phase)
+	}
+
+	// Round 3 combat lasts 29s
+	keepAlive()
+	startCombat(t, s)
+	if s.PhaseRemaining != 29 {
+		t.Fatalf("Round 3 PhaseRemaining = %v, want 29", s.PhaseRemaining)
+	}
+}
+
+func TestInitialTowerShieldInFrontOfTower(t *testing.T) {
+	s := newTestSim(t)
+	s.anomalies = nil
+
+	// Every lane starts with a weaker shield just in front of each tower
+	for side := 0; side < 2; side++ {
+		for lane := 0; lane < NumLanes; lane++ {
+			ts := s.towerShields[side][lane]
+			tr := s.turrets[side][lane][0]
+			if ts == nil || tr == nil {
+				t.Fatalf("side %d lane %d missing tower shield or tower", side, lane)
+			}
+			if side == SideA && ts.X <= tr.X {
+				t.Fatalf("SideA shield X=%v should be in front of tower X=%v", ts.X, tr.X)
+			}
+			if side == SideB && ts.X >= tr.X {
+				t.Fatalf("SideB shield X=%v should be in front of tower X=%v", ts.X, tr.X)
+			}
+			if ts.MaxHP+ts.MaxShield >= s.cfg.Wall.MaxHP+s.cfg.Wall.BaseShield {
+				t.Fatalf("TowerShield (%v) should be weaker than Reinforcement Wall (%v)", ts.MaxHP+ts.MaxShield, s.cfg.Wall.MaxHP+s.cfg.Wall.BaseShield)
+			}
+		}
+	}
+
+	snap := s.SnapshotFor(SideA)
+	if len(snap.TowerShields) != 2*NumLanes {
+		t.Fatalf("expected %d tower shields in snapshot, got %d", 2*NumLanes, len(snap.TowerShields))
+	}
+
+	// Ground unit approaches SideB's lane 0: blocked by TowerShield before reaching Tower
+	startCombat(t, s)
+	sol := &Unit{ID: 1, Type: Soldier, Side: SideA, Lane: 0, X: 83, HP: 500, MaxHP: 500, Damage: 20, TrackLevels: map[UpgradeTrack]int{}}
+	s.units = []*Unit{sol}
+	s.nextUnitID = 2
+
+	ts := s.towerShields[SideB][0]
+	tr := s.turrets[SideB][0][0]
+	trBefore := tr.HP + tr.Shield
+	step(s, 2.5)
+	if ts.HP+ts.Shield >= ts.MaxHP+ts.MaxShield {
+		t.Fatal("soldier should damage enemy TowerShield before tower")
+	}
+	if tr.HP+tr.Shield != trBefore {
+		t.Fatalf("tower should be protected while TowerShield stands; before=%v after=%v", trBefore, tr.HP+tr.Shield)
+	}
+	if sol.X > ts.X {
+		t.Fatalf("ground soldier walked past alive TowerShield: sol.X=%v ts.X=%v", sol.X, ts.X)
 	}
 }

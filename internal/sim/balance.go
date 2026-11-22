@@ -124,16 +124,26 @@ type TurretBalance struct {
 
 // TurnBalance configures the turn-based Prep/Combat loop.
 type TurnBalance struct {
-	PrepDuration         float64 `json:"prepDuration"`         // seconds per preparation phase
-	CombatDuration       float64 `json:"combatDuration"`       // max seconds per combat round
-	MaxRounds            int     `json:"maxRounds"`            // match ends in tie-breaker/draw after MaxRounds
-	InitialTowersPerLane int     `json:"initialTowersPerLane"` // pre-built defensive towers in each lane
-	EscalationStartRound int     `json:"escalationStartRound"` // round when sudden-death speed/tower-dmg scaling starts
-	BreachComebackCoins  int     `json:"breachComebackCoins"`  // emergency coins when losing a life
-	BreachBounty         int     `json:"breachBounty"`         // coins awarded to attacker when a unit crosses the enemy line
-	TowerKillBounty      int     `json:"towerKillBounty"`      // bounty for destroying an enemy tower
-	PillageBonus         int     `json:"pillageBonus"`         // bonus coins per surviving unit past midfield
-	ScoutCost            int     `json:"scoutCost"`            // cost to flare a lane during Prep
+	PrepDuration          float64 `json:"prepDuration"`          // seconds per preparation phase
+	CombatDuration        float64 `json:"combatDuration"`        // max seconds for round 1 combat
+	CombatDurationStep    float64 `json:"combatDurationStep"`    // extra combat seconds added each round after round 1
+	MaxRounds             int     `json:"maxRounds"`             // match ends in tie-breaker/draw after MaxRounds
+	InitialTowersPerLane  int     `json:"initialTowersPerLane"`  // pre-built defensive towers in each lane
+	InitialShieldsPerLane int     `json:"initialShieldsPerLane"` // pre-built weaker shields in front of each tower
+	EscalationStartRound  int     `json:"escalationStartRound"`  // round when sudden-death speed/tower-dmg scaling starts
+	BreachComebackCoins   int     `json:"breachComebackCoins"`   // emergency coins when losing a life
+	BreachBounty          int     `json:"breachBounty"`          // coins awarded to attacker when a unit crosses the enemy line
+	TowerKillBounty       int     `json:"towerKillBounty"`       // bounty for destroying an enemy tower
+	PillageBonus          int     `json:"pillageBonus"`          // bonus coins per surviving unit past midfield
+	ScoutCost             int     `json:"scoutCost"`             // cost to flare a lane during Prep
+}
+
+// TowerShieldBalance configures the pre-built weaker shield standing just in front of each tower.
+type TowerShieldBalance struct {
+	Name       string  `json:"name"`
+	MaxHP      float64 `json:"maxHp"`
+	BaseShield float64 `json:"baseShield"`
+	PadX       float64 `json:"padX"` // distance from owner's edge (just in front of Turret.PadX)
 }
 
 // WallBalance configures buildable, upgradeable, and rebuildable lane reinforcement walls.
@@ -207,15 +217,16 @@ type CouponBalance struct {
 
 // Balance is the single server-side source of truth for tuning.
 type Balance struct {
-	StartCoins int                      `json:"startCoins"`
-	SpawnInset float64                  `json:"spawnInset"` // distance from own edge where units stage
-	Units      map[UnitType]UnitBalance `json:"units"`
-	Turret     TurretBalance            `json:"turret"`
-	Wall       WallBalance              `json:"wall"`
-	Turn       TurnBalance              `json:"turn"`
-	Economy    EconomyBalance           `json:"economy"`
-	Anomaly    AnomalyBalance           `json:"anomaly"`
-	Coupon     CouponBalance            `json:"coupon"`
+	StartCoins  int                      `json:"startCoins"`
+	SpawnInset  float64                  `json:"spawnInset"` // distance from own edge where units stage
+	Units       map[UnitType]UnitBalance `json:"units"`
+	Turret      TurretBalance            `json:"turret"`
+	TowerShield TowerShieldBalance       `json:"towerShield"`
+	Wall        WallBalance              `json:"wall"`
+	Turn        TurnBalance              `json:"turn"`
+	Economy     EconomyBalance           `json:"economy"`
+	Anomaly     AnomalyBalance           `json:"anomaly"`
+	Coupon      CouponBalance            `json:"coupon"`
 }
 
 func makeTrackCosts(c1, c2 int) map[UpgradeTrack][2]int {
@@ -377,6 +388,12 @@ func DefaultBalance() Balance {
 			SpecialName:           "Flak & Focus Coils",
 			SpecialDesc:           "Allows tower to target Flying units & +25% attack speed",
 		},
+		TowerShield: TowerShieldBalance{
+			Name:       "Tower Shield",
+			MaxHP:      90,
+			BaseShield: 40,
+			PadX:       14,
+		},
 		Wall: WallBalance{
 			Name:              "Reinforcement Wall",
 			Cost:              45,
@@ -389,16 +406,18 @@ func DefaultBalance() Balance {
 			ThornDamage:       4.0,
 		},
 		Turn: TurnBalance{
-			PrepDuration:         30,
-			CombatDuration:       22,
-			MaxRounds:            10,
-			InitialTowersPerLane: 1,
-			EscalationStartRound: 5,
-			BreachComebackCoins:  30,
-			BreachBounty:         25,
-			TowerKillBounty:      35,
-			PillageBonus:         5,
-			ScoutCost:            15,
+			PrepDuration:          30,
+			CombatDuration:        27,
+			CombatDurationStep:    1,
+			MaxRounds:             30,
+			InitialTowersPerLane:  1,
+			InitialShieldsPerLane: 1,
+			EscalationStartRound:  5,
+			BreachComebackCoins:   30,
+			BreachBounty:          25,
+			TowerKillBounty:       35,
+			PillageBonus:          5,
+			ScoutCost:             15,
 		},
 		Economy: EconomyBalance{
 			BaseIncome:     35,
