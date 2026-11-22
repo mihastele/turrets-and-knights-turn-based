@@ -22,7 +22,21 @@
       </div>
 
       <div class="lobby-actions">
-        <label for="room-lives">Lives per player <select id="room-lives"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option></select></label>
+        <label class="lobby-select" for="room-win-mode">Win strategy
+          <select id="room-win-mode">
+            <option value="lives" selected>Lives (N total breaches)</option>
+            <option value="breaches">N Breaches (lanes in 1 round)</option>
+          </select>
+        </label>
+        <label class="lobby-select" id="label-room-lives" for="room-lives">Lives per player
+          <select id="room-lives"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option></select>
+        </label>
+        <label class="lobby-select hidden" id="label-room-breaches" for="room-breaches-to-win">Lanes to breach in 1 round
+          <select id="room-breaches-to-win"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option><option value="5">5</option></select>
+        </label>
+        <label class="lobby-select" id="label-room-breach-loots" for="room-max-breach-loots">Max breach loots / lane / turn
+          <select id="room-max-breach-loots"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="13">13</option><option value="14">14</option><option value="15">15</option></select>
+        </label>
         <label class="lobby-checkbox" for="room-hide-luck">
           <input type="checkbox" id="room-hide-luck" checked>
           <span>🎲 Hide Luck <small>(field items stay invisible until combat starts)</small></span>

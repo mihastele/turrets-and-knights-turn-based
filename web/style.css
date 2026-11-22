@@ -65,6 +65,16 @@ html, body {
 .tagline { color: var(--muted); margin: 0 0 22px; font-size: 14px; letter-spacing: 1px; }
 
 .lobby-actions { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.lobby-select {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 13px; color: var(--text); width: 100%;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 14px;
+}
+.lobby-select select {
+  background: var(--panel-3); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 13px; cursor: pointer;
+}
 .lobby-checkbox {
   display: flex; align-items: center; gap: 8px; cursor: pointer;
   font-size: 13px; color: var(--text); user-select: none;

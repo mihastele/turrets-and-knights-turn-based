@@ -395,7 +395,9 @@ func (s *Server) tryStartLocked(rm *room) {
 	rematch := rm.rematch[0] && rm.rematch[1]
 	if rematch {
 		rm.game = sim.New(randomSeed(), s.balance)
+		rm.game.SetWinMode(rm.winMode, rm.breachesToWin)
 		rm.game.SetLives(rm.lives)
+		rm.game.SetMaxBreachLoots(rm.maxBreachLoots)
 		rm.game.SetHideLuck(rm.hideLuck)
 		rm.snapEvery = 0
 		rm.rematch = [2]bool{}

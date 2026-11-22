@@ -422,3 +422,67 @@ func TestHideLuckAndWallScoutWS(t *testing.T) {
 		t.Fatal("expected built wall in snapshot")
 	}
 }
+
+func TestWinModeRoomConfigAndValidation(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ln.Addr().String()
+	srv := New(os.DirFS("../../web"))
+	defer srv.Close()
+	go func() { _ = srv.Serve(ln) }()
+
+	// Validation errors
+	if bad := postJSON(t, "http://"+base+"/api/rooms", map[string]any{"winMode": "invalid"}); bad["error"] == nil {
+		t.Fatal("expected error for invalid winMode")
+	}
+	if bad := postJSON(t, "http://"+base+"/api/rooms", map[string]any{"winMode": "breaches", "breachesToWin": 6}); bad["error"] == nil {
+		t.Fatal("expected error for breachesToWin > 5")
+	}
+	if bad := postJSON(t, "http://"+base+"/api/rooms", map[string]any{"maxBreachLoots": 16}); bad["error"] == nil {
+		t.Fatal("expected error for maxBreachLoots > 15")
+	}
+	if bad := postJSON(t, "http://"+base+"/api/rooms", map[string]any{"maxBreachLoots": 0}); bad["error"] == nil {
+		t.Fatal("expected error for maxBreachLoots < 1")
+	}
+
+	// Valid "N Breaches" room with custom maxBreachLoots
+	created := postJSON(t, "http://"+base+"/api/rooms", map[string]any{
+		"winMode":        "breaches",
+		"breachesToWin":  4,
+		"maxBreachLoots": 12,
+	})
+	if created["error"] != nil {
+		t.Fatalf("unexpected error creating breaches room: %v", created)
+	}
+	code := created["code"].(string)
+	tokenA := created["token"].(string)
+	tokenB := postJSON(t, "http://"+base+"/api/rooms/"+code+"/join", map[string]any{})["token"].(string)
+
+	wsA := dialWS(t, base, code, tokenA)
+	defer wsA.Close()
+	wsB := dialWS(t, base, code, tokenB)
+	defer wsB.Close()
+
+	var raw map[string]any
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = wsA.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if err := wsA.ReadJSON(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if raw["type"] == "snapshot" {
+			break
+		}
+	}
+	if raw["winMode"] != "breaches" {
+		t.Fatalf("winMode = %v, want breaches", raw["winMode"])
+	}
+	if raw["breachesToWin"] != float64(4) {
+		t.Fatalf("breachesToWin = %v, want 4", raw["breachesToWin"])
+	}
+	if raw["maxBreachLoots"] != float64(12) {
+		t.Fatalf("maxBreachLoots = %v, want 12", raw["maxBreachLoots"])
+	}
+}

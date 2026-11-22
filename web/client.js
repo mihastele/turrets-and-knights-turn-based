@@ -761,8 +761,14 @@ function updateEconomyHUD(snap) {
   const foe = snap.players[otherSeat()];
   els.coinsYou.textContent = you.coins;
   els.coinsFoe.textContent = foe.coins;
-  $('lives-you').textContent = `♥ ${you.lives}`;
-  $('lives-foe').textContent = `♥ ${foe.lives}`;
+  if (snap.winMode === 'breaches') {
+    const target = snap.breachesToWin || 3;
+    $('lives-you').textContent = `⚔ ${you.roundBreaches || 0}/${target}`;
+    $('lives-foe').textContent = `⚔ ${foe.roundBreaches || 0}/${target}`;
+  } else {
+    $('lives-you').textContent = `♥ ${you.lives}`;
+    $('lives-foe').textContent = `♥ ${foe.lives}`;
+  }
   els.incomeYou.textContent = `+${you.income}/rnd${you.factory ? ' 🏭' : ''}`;
   els.incomeFoe.textContent = `+${foe.income}/rnd${foe.factory ? ' 🏭' : ''}`;
   updatePoolBar(you);
@@ -835,14 +841,18 @@ function showGameOver(snap) {
     title.textContent = 'VICTORY';
     title.className = 'win';
     els.resultDetail.textContent = snap.winLane >= 0
-      ? `Your forces breached the enemy line in lane ${snap.winLane + 1}!`
+      ? (snap.winMode === 'breaches'
+          ? `Your forces breached ${snap.breachesToWin || 3} lanes in round ${snap.round}!`
+          : `Your forces breached the enemy line in lane ${snap.winLane + 1}!`)
       : 'Your opponent resigned.';
     SFX.win();
   } else {
     title.textContent = 'DEFEAT';
     title.className = 'lose';
     els.resultDetail.textContent = snap.winLane >= 0
-      ? `The enemy breached in lane ${snap.winLane + 1}.`
+      ? (snap.winMode === 'breaches'
+          ? `The enemy breached ${snap.breachesToWin || 3} lanes in round ${snap.round}.`
+          : `The enemy breached in lane ${snap.winLane + 1}.`)
       : 'You resigned.';
     SFX.lose();
   }
@@ -2491,12 +2501,28 @@ async function enterGame(code, token, seat) {
   connectWS(code, token);
 }
 
+function updateWinModeLobbyUI() {
+  const mode = $('room-win-mode') ? $('room-win-mode').value : 'lives';
+  const livesLabel = $('label-room-lives');
+  const breachesLabel = $('label-room-breaches');
+  if (livesLabel) livesLabel.classList.toggle('hidden', mode !== 'lives');
+  if (breachesLabel) breachesLabel.classList.toggle('hidden', mode !== 'breaches');
+}
+
 async function onCreate() {
   els.lobbyError.textContent = '';
   SFX.click();
   try {
     const hideLuck = $('room-hide-luck') ? $('room-hide-luck').checked : true;
-    const res = await api('/api/rooms', { ...couponPayload(), lives: Number($('room-lives').value), hideLuck });
+    const winMode = $('room-win-mode') ? $('room-win-mode').value : 'lives';
+    const maxBreachLoots = Number($('room-max-breach-loots') ? $('room-max-breach-loots').value : 5);
+    const payload = { ...couponPayload(), winMode, maxBreachLoots, hideLuck };
+    if (winMode === 'breaches') {
+      payload.breachesToWin = Number($('room-breaches-to-win').value);
+    } else {
+      payload.lives = Number($('room-lives').value);
+    }
+    const res = await api('/api/rooms', payload);
     await enterGame(res.code, res.token, res.seat);
   } catch (e) {
     els.lobbyError.textContent = e.message;
@@ -2613,6 +2639,10 @@ function laneFromEvent(ev) {
 }
 
 $('btn-create').addEventListener('click', onCreate);
+if ($('room-win-mode')) {
+  $('room-win-mode').addEventListener('change', updateWinModeLobbyUI);
+  updateWinModeLobbyUI();
+}
 $('join-form').addEventListener('submit', onJoin);
 $('btn-quit').addEventListener('click', backToMenu);
 $('btn-without-coupon').addEventListener('click', () => {

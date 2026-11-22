@@ -27,9 +27,12 @@ type Snapshot struct {
 	Caches         []CacheSnapshot   `json:"caches"`
 	Anomalies      []AnomalySnapshot `json:"anomalies"`
 	Burns          []BurnSnapshot    `json:"burns"`
-	HideLuck       bool              `json:"hideLuck"`
-	HiddenLuckCount int              `json:"hiddenLuckCount"`
-	LaneDominance  [NumLanes]int     `json:"laneDominance"`
+	HideLuck        bool              `json:"hideLuck"`
+	HiddenLuckCount int               `json:"hiddenLuckCount"`
+	WinMode         string            `json:"winMode"`
+	BreachesToWin   int               `json:"breachesToWin"`
+	MaxBreachLoots  int               `json:"maxBreachLoots"`
+	LaneDominance   [NumLanes]int     `json:"laneDominance"`
 	ScoutedLanes   [NumLanes]bool    `json:"scoutedLanes"`
 	Events         []Event           `json:"events"`
 	Fx             []FxEvent         `json:"fx"`
@@ -40,8 +43,10 @@ type PlayerSnapshot struct {
 	Income            int                               `json:"income"` // estimated next-round base + factory income
 	Factory           bool                              `json:"factory"`
 	FactoryLevel      int                               `json:"factoryLevel"`
-	Lives             int                               `json:"lives"`
-	UnitUpgrades      map[UnitType]int                  `json:"unitUpgrades"`
+	Lives              int                               `json:"lives"`
+	RoundBreaches      int                               `json:"roundBreaches"`
+	RoundBreachedLanes [NumLanes]bool                    `json:"roundBreachedLanes"`
+	UnitUpgrades       map[UnitType]int                  `json:"unitUpgrades"`
 	UnitTrackUpgrades map[UnitType]map[UpgradeTrack]int `json:"unitTrackUpgrades"`
 	SoldierPool       map[UnitType]int                  `json:"soldierPool"`
 	DamageDealt       int                               `json:"damageDealt"`
@@ -188,6 +193,9 @@ func (s *Sim) buildSnapshot(viewerSide int, drain bool) Snapshot {
 		TimeLimit:      float64(s.cfg.Turn.MaxRounds),
 		OvertimeStart:  float64(s.cfg.Turn.EscalationStartRound),
 		HideLuck:       s.HideLuck,
+		WinMode:        string(s.WinMode),
+		BreachesToWin:  s.BreachesToWin,
+		MaxBreachLoots: s.MaxBreachLoots,
 		LaneDominance:  s.laneDominance,
 		Events:         events,
 		Fx:             fx,
@@ -205,8 +213,10 @@ func (s *Sim) buildSnapshot(viewerSide int, drain bool) Snapshot {
 			Income:            p.EstimatedRoundIncome(s.cfg, s.Round+1),
 			Factory:           p.Factory,
 			FactoryLevel:      p.FactoryLevel,
-			Lives:             p.Lives,
-			UnitUpgrades:      copyUpgrades(p.UnitUpgrades),
+			Lives:              p.Lives,
+			RoundBreaches:      s.countRoundBreaches(i),
+			RoundBreachedLanes: s.roundBreachedLanes[i],
+			UnitUpgrades:       copyUpgrades(p.UnitUpgrades),
 			UnitTrackUpgrades: copyUnitTrackUpgrades(p.UnitTrackUpgrades),
 			SoldierPool:       copyPool(p.SoldierPool),
 			DamageDealt:       int(p.DamageDealt + 0.5),

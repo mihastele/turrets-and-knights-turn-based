@@ -616,3 +616,105 @@ func TestInitialTowerShieldInFrontOfTower(t *testing.T) {
 		t.Fatalf("ground soldier walked past alive TowerShield: sol.X=%v ts.X=%v", sol.X, ts.X)
 	}
 }
+
+func TestNBreachesWinMode(t *testing.T) {
+	s := newTestSim(t)
+	s.SetWinMode(WinModeBreaches, 3)
+	clearTowers(s)
+	s.anomalies = nil
+	startCombat(t, s)
+
+	// Breach only 2 distinct lanes (even with multiple units in lane 0): should NOT win, should not deduct lives.
+	s.units = []*Unit{
+		{ID: 1, Type: Knight, Side: SideA, Lane: 0, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{}},
+		{ID: 2, Type: Knight, Side: SideA, Lane: 0, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{}},
+		{ID: 3, Type: Knight, Side: SideA, Lane: 1, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{}},
+	}
+	s.nextUnitID = 4
+	step(s, 0.5)
+	if s.Finished {
+		t.Fatalf("expected match not to finish with only 2 of 3 lanes breached (winner=%d)", s.Winner)
+	}
+	if s.countRoundBreaches(SideA) != 2 {
+		t.Fatalf("roundBreaches = %d, want 2", s.countRoundBreaches(SideA))
+	}
+	if s.players[SideB].Lives != 1 {
+		t.Fatalf("N Breaches mode should not decrement Lives, got %d", s.players[SideB].Lives)
+	}
+
+	// End round 1: breached lanes reset in Round 2 (partial progress does not carry over).
+	s.endCombatPhase()
+	if s.Round != 2 || s.Phase != PhasePrep {
+		t.Fatalf("expected Round 2 Prep, got R%d %s", s.Round, s.Phase)
+	}
+	if s.countRoundBreaches(SideA) != 0 {
+		t.Fatalf("expected roundBreaches to reset at end of round, got %d", s.countRoundBreaches(SideA))
+	}
+
+	// Round 2: breach 1 lane -> still not enough because Round 1's 2 lanes did not carry over.
+	startCombat(t, s)
+	s.units = []*Unit{
+		{ID: 10, Type: Knight, Side: SideA, Lane: 2, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{}},
+	}
+	s.nextUnitID = 11
+	step(s, 0.5)
+	if s.Finished {
+		t.Fatal("1 lane in Round 2 should not combine with 2 lanes in Round 1 to win")
+	}
+
+	// Breach 2 more distinct lanes in the same Round 2 (total 3 in Round 2) -> SideA wins!
+	s.units = []*Unit{
+		{ID: 12, Type: Knight, Side: SideA, Lane: 3, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{}},
+		{ID: 13, Type: Knight, Side: SideA, Lane: 4, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{}},
+	}
+	s.nextUnitID = 14
+	step(s, 0.5)
+	if !s.Finished || s.Winner != SideA || s.Draw {
+		t.Fatalf("expected SideA victory on 3 lanes breached in Round 2, got finished=%v winner=%d draw=%v", s.Finished, s.Winner, s.Draw)
+	}
+}
+
+func TestMaxBreachLootsPerLanePerTurn(t *testing.T) {
+	s := newTestSim(t)
+	s.SetWinMode(WinModeBreaches, 5)
+	s.SetMaxBreachLoots(3)
+	clearTowers(s)
+	s.anomalies = nil
+	startCombat(t, s)
+
+	coinsBefore := coinBalance(s, SideA)
+	// 6 units breach Lane 0 and 2 units breach Lane 1 in the same turn.
+	// Lane 0 is capped at 3 loots; Lane 1 gets 2 loots => total 5 * BreachBounty.
+	for i := 0; i < 6; i++ {
+		s.units = append(s.units, &Unit{
+			ID: int64(i + 1), Type: Knight, Side: SideA, Lane: 0, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{},
+		})
+	}
+	for i := 0; i < 2; i++ {
+		s.units = append(s.units, &Unit{
+			ID: int64(10 + i), Type: Knight, Side: SideA, Lane: 1, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{},
+		})
+	}
+	s.nextUnitID = 20
+	step(s, 0.5)
+
+	want := 5 * s.cfg.Turn.BreachBounty
+	if got := coinBalance(s, SideA) - coinsBefore; got != want {
+		t.Fatalf("breach loot = %d, want %d (3 from lane 0 + 2 from lane 1)", got, want)
+	}
+	if s.Finished {
+		t.Fatal("expected match to continue since only 2 of 5 lanes were breached")
+	}
+
+	// Next round resets the per-lane loot cap.
+	s.endCombatPhase()
+	startCombat(t, s)
+	coinsRound2 := coinBalance(s, SideA)
+	s.units = []*Unit{
+		{ID: 30, Type: Knight, Side: SideA, Lane: 0, X: FieldLength - 0.5, HP: 100, MaxHP: 100, Damage: 16, TrackLevels: map[UpgradeTrack]int{}},
+	}
+	step(s, 0.5)
+	if got := coinBalance(s, SideA) - coinsRound2; got != s.cfg.Turn.BreachBounty {
+		t.Fatalf("round 2 lane 0 breach loot = %d, want %d", got, s.cfg.Turn.BreachBounty)
+	}
+}

@@ -20,6 +20,14 @@ const (
 	PhaseCombat TurnPhase = "combat"
 )
 
+// WinMode determines how a match is won.
+type WinMode string
+
+const (
+	WinModeLives    WinMode = "lives"
+	WinModeBreaches WinMode = "breaches"
+)
+
 // ---------------------------------------------------------------------------
 // Actions (client intentions). The server validates everything; the client
 // never reports money, damage, positions or victory.
@@ -287,10 +295,15 @@ type Sim struct {
 	walls        [2][NumLanes]*Wall
 	players      [2]Player
 
-	HideLuck         bool `json:"hideLuck"`
-	scoutedLanes     [2][NumLanes]bool
-	laneParticipated [2][NumLanes]bool
-	laneDominance    [NumLanes]int
+	HideLuck             bool `json:"hideLuck"`
+	WinMode              WinMode `json:"winMode"`
+	BreachesToWin        int     `json:"breachesToWin"`
+	MaxBreachLoots       int     `json:"maxBreachLoots"`
+	roundBreachedLanes   [2][NumLanes]bool
+	roundLaneBreachLoots [2][NumLanes]int
+	scoutedLanes         [2][NumLanes]bool
+	laneParticipated     [2][NumLanes]bool
+	laneDominance        [NumLanes]int
 
 	Overtime     bool    `json:"overtime"`
 	TurretFactor float64 `json:"turretFactor"`
@@ -321,6 +334,9 @@ func New(seed int64, cfg Balance) *Sim {
 		Phase:          PhasePrep,
 		Round:          1,
 		PhaseRemaining: cfg.Turn.PrepDuration,
+		WinMode:        WinModeLives,
+		BreachesToWin:  3,
+		MaxBreachLoots: 5,
 		Winner:         NoSide,
 		WinLane:        -1,
 		nextUnitID:     1,
@@ -394,6 +410,42 @@ func (s *Sim) SetLives(lives int) {
 	for i := range s.players {
 		s.players[i].Lives = lives
 	}
+}
+
+// SetWinMode configures the match win strategy ("lives" or "breaches") and the
+// target number of distinct lanes to breach in one round when in "breaches" mode.
+func (s *Sim) SetWinMode(mode WinMode, breachesToWin int) {
+	if mode != WinModeBreaches {
+		mode = WinModeLives
+	}
+	if breachesToWin < 1 {
+		breachesToWin = 3
+	} else if breachesToWin > NumLanes {
+		breachesToWin = NumLanes
+	}
+	s.WinMode = mode
+	s.BreachesToWin = breachesToWin
+}
+
+// SetMaxBreachLoots configures how many breaching units per lane per turn can
+// earn breach coins (1..15).
+func (s *Sim) SetMaxBreachLoots(maxLoots int) {
+	if maxLoots < 1 {
+		maxLoots = 1
+	} else if maxLoots > 15 {
+		maxLoots = 15
+	}
+	s.MaxBreachLoots = maxLoots
+}
+
+func (s *Sim) countRoundBreaches(side int) int {
+	n := 0
+	for lane := 0; lane < NumLanes; lane++ {
+		if s.roundBreachedLanes[side][lane] {
+			n++
+		}
+	}
+	return n
 }
 
 // SetHideLuck configures whether field anomalies are hidden during Prep until Combat starts.
@@ -1108,6 +1160,8 @@ func (s *Sim) startCombatPhase() {
 	s.Ready = [2]bool{}
 	s.combatElapsed = 0
 	s.laneParticipated = [2][NumLanes]bool{}
+	s.roundBreachedLanes = [2][NumLanes]bool{}
+	s.roundLaneBreachLoots = [2][NumLanes]int{}
 	for _, u := range s.units {
 		u.Staged = false
 		u.DistanceMoved = 0
@@ -1186,6 +1240,8 @@ func (s *Sim) endCombatPhase() {
 	s.burns = nil
 	s.scoutedLanes = [2][NumLanes]bool{}
 	s.laneParticipated = [2][NumLanes]bool{}
+	s.roundBreachedLanes = [2][NumLanes]bool{}
+	s.roundLaneBreachLoots = [2][NumLanes]int{}
 
 	// Recharge turret, tower shield, and wall shields between rounds
 	for side := 0; side < 2; side++ {
@@ -1253,7 +1309,7 @@ func (s *Sim) laneRemainingPower(side, lane int) float64 {
 func (s *Sim) resolveMaxRoundsWinner() {
 	s.Finished = true
 	a, b := &s.players[SideA], &s.players[SideB]
-	if a.Lives != b.Lives {
+	if s.WinMode != WinModeBreaches && a.Lives != b.Lives {
 		if a.Lives > b.Lives {
 			s.Winner = SideA
 		} else {
@@ -2299,6 +2355,10 @@ func (s *Sim) removeDead() {
 func (s *Sim) checkEnd() {
 	var breachLane = [2]int{-1, -1}
 	remaining := s.units[:0]
+	maxLoots := s.MaxBreachLoots
+	if maxLoots <= 0 {
+		maxLoots = 5
+	}
 	for _, u := range s.units {
 		if u.HP <= 0 {
 			continue
@@ -2311,11 +2371,19 @@ func (s *Sim) checkEnd() {
 		attacker := u.Side
 		defender := 1 - attacker
 		breachLane[attacker] = u.Lane
-		s.players[defender].Lives--
-		if s.players[defender].Lives > 0 && s.cfg.Turn.BreachComebackCoins > 0 {
-			s.players[defender].Coins += s.cfg.Turn.BreachComebackCoins
+		if validLane(u.Lane) {
+			s.roundBreachedLanes[attacker][u.Lane] = true
 		}
-		if bounty := s.cfg.Turn.BreachBounty; bounty > 0 {
+
+		if s.WinMode != WinModeBreaches {
+			s.players[defender].Lives--
+			if s.players[defender].Lives > 0 && s.cfg.Turn.BreachComebackCoins > 0 {
+				s.players[defender].Coins += s.cfg.Turn.BreachComebackCoins
+			}
+		}
+
+		if bounty := s.cfg.Turn.BreachBounty; bounty > 0 && validLane(u.Lane) && s.roundLaneBreachLoots[attacker][u.Lane] < maxLoots {
+			s.roundLaneBreachLoots[attacker][u.Lane]++
 			s.players[attacker].Coins += bounty
 			s.players[attacker].BountyEarned += bounty
 			fxX := FieldLength
@@ -2323,7 +2391,7 @@ func (s *Sim) checkEnd() {
 				fxX = 0
 			}
 			s.fx = append(s.fx, FxEvent{Kind: "bounty", Unit: fmt.Sprintf("%d", bounty), Side: attacker, Lane: u.Lane, FromX: fxX, ToX: fxX, Slot: -1})
-			if s.players[defender].Lives > 0 {
+			if s.WinMode == WinModeBreaches || s.players[defender].Lives > 0 {
 				s.addEvent(attacker, "bounty", "%s unit crossed the line in lane %d! (+%dc)", sideName(attacker), u.Lane+1, bounty)
 			}
 		}
@@ -2334,6 +2402,33 @@ func (s *Sim) checkEnd() {
 	}
 	if s.players[SideB].Lives < 0 {
 		s.players[SideB].Lives = 0
+	}
+
+	if s.WinMode == WinModeBreaches {
+		target := s.BreachesToWin
+		if target <= 0 {
+			target = 3
+		}
+		breachesA := s.countRoundBreaches(SideA)
+		breachesB := s.countRoundBreaches(SideB)
+		switch {
+		case breachesA >= target && breachesB >= target:
+			s.Finished = true
+			s.Draw = true
+			s.Winner = NoSide
+			s.addEvent(SideNone, "draw", "Both armies breached %d lanes on the same tick — draw!", target)
+		case breachesA >= target:
+			s.Finished = true
+			s.Winner = SideA
+			s.WinLane = breachLane[SideA]
+			s.addEvent(SideNone, "breach", "Blue breached %d lanes in Round %d!", target, s.Round)
+		case breachesB >= target:
+			s.Finished = true
+			s.Winner = SideB
+			s.WinLane = breachLane[SideB]
+			s.addEvent(SideNone, "breach", "Red breached %d lanes in Round %d!", target, s.Round)
+		}
+		return
 	}
 
 	switch {
