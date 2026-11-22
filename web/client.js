@@ -9,11 +9,20 @@
 const FIELD = { x0: 52, x1: 1108, y0: 14, lanes: 5, laneH: 116 };
 const W = 1160, H = 620;
 const SCALE = 2;
-const UNIT_TYPES = ['soldier', 'bowman', 'knight', 'ram', 'siege'];
+const UNIT_TYPES = ['soldier', 'bowman', 'knight', 'shieldbearer', 'mage', 'ram', 'siege'];
+const COUPON_UNITS = ['valkyrie', 'dragon'];
+const ALL_UNITS = [...UNIT_TYPES, ...COUPON_UNITS];
 const DRAGON_TYPE = 'dragon';
-const ABILITY_EFFECTS = ['rockslide', 'dragonfire'];
-const HOTKEYS = { '1': 'soldier', '2': 'bowman', '3': 'knight', '4': 'ram', '5': 'siege', '6': 'turret', '7': 'factory' };
-const COUPON_HOTKEYS = { '8': 'dragon', '9': 'rockslide', '0': 'dragonfire' };
+const ABILITY_EFFECTS = ['rockslide', 'dragonfire', 'warcry'];
+const TRACKS = [
+  { id: 'damage', label: '⚔️ Attack' },
+  { id: 'attackSpeed', label: '⚡ Speed' },
+  { id: 'hp', label: '❤️ Vitality' },
+  { id: 'shield', label: '🛡️ Shield' },
+  { id: 'special', label: '👑 Elite', couponOnly: true },
+];
+const HOTKEYS = { '1': 'soldier', '2': 'bowman', '3': 'knight', '4': 'shieldbearer', '5': 'mage', '6': 'ram', '7': 'siege', 't': 'turret', 'f': 'factory' };
+const COUPON_HOTKEYS = { '8': 'valkyrie', '9': 'dragon', '0': 'rockslide', '-': 'dragonfire', '=': 'warcry' };
 const LANE_H = FIELD.laneH;
 
 const cv = document.getElementById('battlefield');
@@ -222,6 +231,7 @@ const state = {
   feed: [],
   over: false,
   hoveredEntity: null,
+  selectedUpgradeUnit: 'soldier',
 };
 
 // FX pools (coordinates: x in field units, y in screen px offset from lane center)
@@ -256,6 +266,8 @@ const els = {
   rematchBtn: $('btn-rematch'), rematchStatus: $('rematch-status'),
   resignBtn: $('btn-resign'),
   clock: $('clock'), phase: $('phase-pill'), turretPower: $('turret-power'),
+  roundBadge: $('round-badge'), btnReady: $('btn-ready'), readyStatus: $('ready-status'),
+  poolBar: $('pool-bar'), upgradeUnitTabs: $('upgrade-unit-tabs'),
   sideBadge: $('side-badge'),
   coinsYou: $('coins-you'), coinsFoe: $('coins-foe'),
   incomeYou: $('income-you'), incomeFoe: $('income-foe'),
@@ -282,6 +294,7 @@ const els = {
   couponStatus: $('coupon-status'),
   abilityRockslide: $('ability-rockslide'),
   abilityDragonfire: $('ability-dragonfire'),
+  abilityWarcry: $('ability-warcry'),
 };
 
 // ---------------------------------------------------------------------------
@@ -413,54 +426,53 @@ function applyCouponFromHello(coupon) {
   state.coupon = coupon && coupon.entitled ? coupon : null;
   const on = !!state.coupon;
   els.couponBadge.classList.toggle('hidden', !on);
-  addDragonShopItem();
-  addDragonUpgradeRow();
+  addCouponShopItems();
+  buildUpgradePanels();
   els.couponPanel.classList.toggle('locked', !on);
   els.couponExpiry.textContent = on ? '' : '🔒 Requires an active coupon · see the coupon guide in the lobby';
-  els.couponPanel.querySelectorAll('.ability-btn').forEach(btn => { btn.disabled = !on; btn.title = on ? '' : 'Requires an active coupon'; });
+  els.couponPanel.querySelectorAll('.ability-btn').forEach(btn => {
+    btn.disabled = !on;
+    btn.title = on ? '' : '🔒 Requires an active coupon';
+  });
+  const cb = state.balance && state.balance.coupon;
+  if (cb) {
+    $('ability-rockslide-cost').textContent = cb.rockslide.cost + 'c';
+    $('ability-dragonfire-cost').textContent = cb.dragonFire.cost + 'c';
+    if (cb.warcry) $('ability-warcry-cost').textContent = cb.warcry.cost + 'c';
+  }
   if (!on) return;
   const label = state.coupon.label || 'Coupon holder';
   const until = state.coupon.expiresAt ? `valid until ${fmtExpiry(state.coupon.expiresAt)}` : '';
   els.couponBadge.title = `${label}${until ? ' — ' + until : ''}`;
   els.couponExpiry.textContent = `${label}${until ? ' — ' + until : ''}`;
-  // Ability costs from the authoritative balance payload.
-  const cb = state.balance && state.balance.coupon;
-  if (cb) {
-    $('ability-rockslide-cost').textContent = cb.rockslide.cost + 'c';
-    $('ability-dragonfire-cost').textContent = cb.dragonFire.cost + 'c';
+}
+
+function addCouponShopItems() {
+  const specs = [
+    { unit: 'valkyrie', key: '8', icon: '⚡' },
+    { unit: 'dragon', key: '9', icon: '🐉' },
+  ];
+  for (const s of specs) {
+    const existing = els.shop.querySelector(`.shop-item[data-unit="${s.unit}"]`);
+    const u = state.balance && state.balance.units && state.balance.units[s.unit];
+    if (!u) continue;
+    if (existing) {
+      existing.classList.toggle('locked-coupon', !state.coupon);
+      const lockSpan = existing.querySelector('.lock-tag');
+      if (lockSpan) lockSpan.textContent = state.coupon ? '✓ Coupon' : '🔒 Coupon';
+      continue;
+    }
+    const btn = document.createElement('button');
+    btn.className = 'shop-item dragon-item' + (state.coupon ? '' : ' locked-coupon');
+    btn.dataset.unit = s.unit;
+    btn.dataset.cost = u.cost;
+    btn.innerHTML =
+      `<span class="si-key">${s.key}</span>` +
+      `<div class="si-top"><span class="si-name">${s.icon} ${u.name}</span><span class="si-cost">${u.cost}c</span></div>` +
+      `<div class="si-role">${u.role} <em class="lock-tag">${state.coupon ? '✓ Coupon' : '🔒 Coupon'}</em></div>`;
+    btn.addEventListener('click', () => { SFX.click(); selectUnit(s.unit); });
+    els.shop.appendChild(btn);
   }
-  addDragonShopItem();
-  addDragonUpgradeRow();
-}
-
-function addDragonShopItem() {
-  if (els.shop.querySelector('.dragon-item')) return;
-  const u = state.balance && state.balance.units && state.balance.units.dragon;
-  if (!u) return;
-  const btn = document.createElement('button');
-  btn.className = 'shop-item dragon-item';
-  btn.dataset.unit = 'dragon';
-  btn.dataset.cost = u.cost;
-  btn.innerHTML =
-    '<span class="si-key">8</span>' +
-    '<div class="si-top"><span class="si-name">🐉 ' + u.name + '</span><span class="si-cost">' + u.cost + 'c</span></div>' +
-    '<div class="si-role">' + u.role + ' <em>🔒 Coupon</em></div>';
-  btn.addEventListener('click', () => { SFX.click(); selectUnit('dragon'); });
-  els.shop.insertBefore(btn, els.shop.firstChild);
-}
-
-function addDragonUpgradeRow() {
-  const u = state.balance && state.balance.units && state.balance.units.dragon;
-  if (!u || els.unitUpgrades.querySelector('[data-unit="dragon"]')) return;
-  const row = document.createElement('div');
-  row.className = 'upgrade-row';
-  row.dataset.unit = 'dragon';
-  row.innerHTML =
-    '<span class="u-name">🐉 Dragon</span>' +
-    '<span class="pips"><span class="pip" data-pip="0"></span><span class="pip" data-pip="1"></span></span>' +
-    '<button class="upgrade-btn">Upgrade</button>';
-  row.querySelector('.upgrade-btn').addEventListener('click', () => { SFX.click(); send({ type: 'upgradeUnit', unit: 'dragon' }); });
-  els.unitUpgrades.appendChild(row);
 }
 
 function selectAbility(effect) {
@@ -471,22 +483,34 @@ function selectAbility(effect) {
 }
 
 function abilityButtonFor(effect) {
-  return effect === 'rockslide' ? els.abilityRockslide : els.abilityDragonfire;
+  if (effect === 'rockslide') return els.abilityRockslide;
+  if (effect === 'dragonfire') return els.abilityDragonfire;
+  return els.abilityWarcry;
 }
 
 function updateAbilityButtons(snap) {
-  if (!state.coupon) return;
   const b = state.balance && state.balance.coupon;
-  const cfgFor = (e) => (b ? (e === 'rockslide' ? b.rockslide : b.dragonFire) : null);
+  const cfgFor = (e) => {
+    if (!b) return null;
+    if (e === 'rockslide') return b.rockslide;
+    if (e === 'dragonfire') return b.dragonFire;
+    return b.warcry;
+  };
   const you = snap.players[state.seat];
   const abilities = (you && you.abilities) || {};
   for (const effect of ABILITY_EFFECTS) {
     const btn = els.couponPanel.querySelector(`[data-effect="${effect}"]`);
     if (!btn) continue;
+    const cdEl = btn.querySelector('.ab-cooldown');
+    if (!state.coupon) {
+      btn.disabled = true;
+      cdEl.textContent = '🔒 Coupon';
+      cdEl.classList.remove('ready');
+      continue;
+    }
     const cfg = cfgFor(effect);
     const cost = cfg ? cfg.cost : 0;
     const cd = abilities[effect] || 0;
-    const cdEl = btn.querySelector('.ab-cooldown');
     btn.disabled = state.over || cd > 0.05 || !you || you.coins < cost;
     if (cd > 0.05) {
       cdEl.textContent = `Cooldown ${Math.ceil(cd)}s`;
@@ -667,6 +691,23 @@ function handleEvent(ev) {
       showBanner('⚔ ' + ev.text, 'red');
       SFX.streakHorn();
       break;
+    case 'bounty':
+      showBanner(`💰 ${ev.text}`, 'gold');
+      SFX.windfall();
+      break;
+    case 'warcry':
+      showBanner(`📯 ${ev.text}`, 'blue');
+      SFX.upgrade();
+      break;
+    case 'combatStart':
+      showBanner(`⚔️ ${ev.text}`, 'red');
+      SFX.firstBlood();
+      break;
+    case 'roundPrep':
+      showBanner(`🛡️ Round ${state.snapNow?.round || ''} Prep`, 'blue');
+      break;
+    case 'ready':
+      break;
     case 'breach':
       SFX.breach();
       fx.shake = Math.max(fx.shake, 9);
@@ -681,16 +722,33 @@ function handleEvent(ev) {
 }
 
 function updateClock(snap) {
-  const t = Math.max(0, snap.time);
+  const t = Math.max(0, Math.ceil(snap.phaseRemaining || 0));
   const mm = Math.floor(t / 60);
-  const ss = Math.floor(t % 60).toString().padStart(2, '0');
+  const ss = (t % 60).toString().padStart(2, '0');
   els.clock.textContent = `${mm}:${ss}`;
   els.clock.classList.toggle('overtime', !!snap.overtime);
-  els.phase.textContent = snap.overtime ? 'OVERTIME' : (snap.time >= snap.overtimeStart - 30 ? 'SUDDEN DEATH SOON' : 'MATCH');
-  els.phase.classList.toggle('overtime', !!snap.overtime);
+  if (els.roundBadge) {
+    els.roundBadge.textContent = `ROUND ${snap.round || 1}/${snap.maxRounds || 10}`;
+  }
+  const isPrep = snap.phase === 'prep';
+  els.phase.textContent = isPrep ? 'PREP PHASE' : 'COMBAT';
+  els.phase.className = 'phase-pill ' + (isPrep ? 'prep' : 'combat') + (snap.overtime ? ' overtime' : '');
+
+  if (els.btnReady) {
+    const myReady = !!(snap.ready && snap.ready[state.seat]);
+    const foeReady = !!(snap.ready && snap.ready[otherSeat()]);
+    els.btnReady.disabled = !isPrep || state.over;
+    els.btnReady.classList.toggle('is-ready', myReady);
+    els.btnReady.textContent = myReady ? '✓ READY' : 'READY';
+    if (els.readyStatus) {
+      els.readyStatus.textContent = isPrep
+        ? (foeReady ? 'Foe: READY!' : 'Foe: Planning…')
+        : 'Armies clashing!';
+    }
+  }
   if (snap.overtime) {
     els.turretPower.classList.remove('hidden');
-    els.turretPower.textContent = `Turrets at ${Math.round(snap.turretFactor * 100)}% damage`;
+    els.turretPower.textContent = `ESCALATION (R${snap.round}+): +Speed & +Tower Dmg`;
   } else {
     els.turretPower.classList.add('hidden');
   }
@@ -705,9 +763,28 @@ function updateEconomyHUD(snap) {
   els.coinsFoe.textContent = foe.coins;
   $('lives-you').textContent = `♥ ${you.lives}`;
   $('lives-foe').textContent = `♥ ${foe.lives}`;
-  els.incomeYou.textContent = `+${you.income}/5s${you.factory ? ' 🏭' : ''}`;
-  els.incomeFoe.textContent = `+${foe.income}/5s${foe.factory ? ' 🏭' : ''}`;
-  refreshAffordability(you.coins);
+  els.incomeYou.textContent = `+${you.income}/rnd${you.factory ? ' 🏭' : ''}`;
+  els.incomeFoe.textContent = `+${foe.income}/rnd${foe.factory ? ' 🏭' : ''}`;
+  updatePoolBar(you);
+  refreshAffordability(you.coins, snap);
+}
+
+function updatePoolBar(you) {
+  if (!els.poolBar) return;
+  const pool = you.soldierPool || {};
+  const entries = ALL_UNITS.filter((u) => (pool[u] || 0) > 0);
+  if (entries.length === 0) {
+    els.poolBar.classList.add('hidden');
+    els.poolBar.innerHTML = '';
+    return;
+  }
+  els.poolBar.classList.remove('hidden');
+  const b = state.balance;
+  els.poolBar.innerHTML = '<span style="color:var(--good);font-weight:700">Pool (FREE):</span>' +
+    entries.map((u) => `<button class="pool-chip" data-pool-unit="${u}">${(b && b.units[u]?.name) || u} ×${pool[u]}</button>`).join('');
+  els.poolBar.querySelectorAll('.pool-chip').forEach((chip) => {
+    chip.addEventListener('click', () => { SFX.click(); selectUnit(chip.dataset.poolUnit); });
+  });
 }
 
 // Red pulsing warning when an enemy closing in on *your* breach line.
@@ -827,6 +904,7 @@ function buildShop() {
   els.shop.innerHTML = '';
   UNIT_TYPES.forEach((type, i) => {
     const u = b.units[type];
+    if (!u) return;
     const btn = document.createElement('button');
     btn.className = 'shop-item';
     btn.dataset.unit = type;
@@ -838,13 +916,14 @@ function buildShop() {
     btn.addEventListener('click', () => { SFX.click(); selectUnit(type); });
     els.shop.appendChild(btn);
   });
+  addCouponShopItems();
   const turretBtn = document.createElement('button');
   turretBtn.className = 'shop-item';
   turretBtn.dataset.cost = b.turret.cost;
   turretBtn.innerHTML =
-    '<span class="si-key">6</span>' +
+    '<span class="si-key">T</span>' +
     '<div class="si-top"><span class="si-name">' + b.turret.name + '</span><span class="si-cost">' + b.turret.cost + 'c</span></div>' +
-    '<div class="si-role">Two slots per lane. Reliable lane defense; turrets cannot cover neighboring lanes.</div>';
+    '<div class="si-role">Two slots per lane. Blocks &amp; fires on ground troops.</div>';
   turretBtn.addEventListener('click', () => { SFX.click(); selectTurret(); });
   els.shop.appendChild(turretBtn);
   const fac = b.economy;
@@ -853,9 +932,9 @@ function buildShop() {
   facBtn.dataset.cost = fac.factoryCost;
   facBtn.dataset.factory = '1';
   facBtn.innerHTML =
-    '<span class="si-key">7</span>' +
+    '<span class="si-key">F</span>' +
     '<div class="si-top"><span class="si-name">Coin Factory</span><span class="si-cost">' + fac.factoryCost + 'c</span></div>' +
-    '<div class="si-role">+' + fac.factoryIncome + ' coins every 5s (payback ≈ ' + fac.factoryPayback + 's). One per player.</div>';
+    '<div class="si-role">+' + fac.factoryIncome + ' coins every round. One per player (upgradeable).</div>';
   facBtn.addEventListener('click', () => { SFX.click(); send({ type: state.snapNow?.players[state.seat].factory ? 'upgradeFactory' : 'factory' }); });
   els.shop.appendChild(facBtn);
 }
@@ -863,19 +942,52 @@ function buildShop() {
 function buildUpgradePanels() {
   const b = state.balance;
   if (!b) return;
+  if (els.upgradeUnitTabs) {
+    els.upgradeUnitTabs.innerHTML = '';
+    ALL_UNITS.forEach((type) => {
+      const u = b.units[type];
+      if (!u) return;
+      const tab = document.createElement('button');
+      tab.className = 'up-tab' + (state.selectedUpgradeUnit === type ? ' active' : '') + (u.couponOnly && !state.coupon ? ' locked' : '');
+      tab.dataset.unit = type;
+      tab.textContent = (u.couponOnly && !state.coupon ? '🔒 ' : '') + u.name;
+      tab.addEventListener('click', () => {
+        SFX.click();
+        state.selectedUpgradeUnit = type;
+        buildUpgradePanels();
+        if (state.snapNow) updateUpgradeButtons(state.snapNow);
+      });
+      els.upgradeUnitTabs.appendChild(tab);
+    });
+  }
+
   els.unitUpgrades.innerHTML = '';
-  UNIT_TYPES.forEach((type) => {
-    const u = b.units[type];
-    const row = document.createElement('div');
-    row.className = 'upgrade-row';
-    row.dataset.unit = type;
-    row.innerHTML =
-      '<span class="u-name">' + u.name + '</span>' +
-      '<span class="pips"><span class="pip" data-pip="0"></span><span class="pip" data-pip="1"></span></span>' +
-      '<button class="upgrade-btn">Upgrade</button>';
-    row.querySelector('.upgrade-btn').addEventListener('click', () => { SFX.click(); send({ type: 'upgradeUnit', unit: type }); });
-    els.unitUpgrades.appendChild(row);
-  });
+  const type = state.selectedUpgradeUnit || 'soldier';
+  const u = b.units[type];
+  if (u) {
+    TRACKS.forEach((tr) => {
+      const row = document.createElement('div');
+      const isSpecialLocked = tr.couponOnly && !state.coupon;
+      const isUnitLocked = u.couponOnly && !state.coupon;
+      row.className = 'upgrade-row' + ((isSpecialLocked || isUnitLocked) ? ' locked-track' : '');
+      row.dataset.unit = type;
+      row.dataset.track = tr.id;
+      const maxPips = tr.id === 'special' ? 1 : 2;
+      let pipsHtml = '<span class="pips">';
+      for (let i = 0; i < maxPips; i++) pipsHtml += `<span class="pip" data-pip="${i}"></span>`;
+      pipsHtml += '</span>';
+      const label = tr.id === 'special' ? `${tr.label}: ${u.specialName || 'Elite'}` : tr.label;
+      row.innerHTML =
+        `<span class="u-name" title="${tr.id === 'special' ? (u.specialDesc || '') : ''}">${label}</span>` +
+        pipsHtml +
+        `<button class="upgrade-btn">Upgrade</button>`;
+      row.querySelector('.upgrade-btn').addEventListener('click', () => {
+        SFX.click();
+        send({ type: 'upgradeUnit', unit: type, track: tr.id });
+      });
+      els.unitUpgrades.appendChild(row);
+    });
+  }
 
   els.turretUpgrades.innerHTML = '';
   const slotCount = (b.turret && b.turret.slots) || 2;
@@ -889,27 +1001,51 @@ function buildUpgradePanels() {
         '<div class="tc-slot" data-slot="' + slot + '">' +
           '<div class="tc-slot-head"><span class="tc-tag">' + String.fromCharCode(65 + slot) + '</span>' +
           '<span class="tc-level">—</span></div>' +
-          '<button>Build</button>' +
+          '<button class="tc-up-btn" data-track="damage">⚔️ Dmg</button>' +
+          '<button class="tc-up-btn" data-track="shield">🛡️ Shd</button>' +
+          '<button class="tc-up-btn" data-track="special">' + (state.coupon ? '✈️ Flak' : '🔒 Flak') + '</button>' +
         '</div>';
     }
     cell.innerHTML = html;
     cell.querySelectorAll('.tc-slot button').forEach((btn) => {
       btn.addEventListener('click', () => {
         SFX.click();
-        send({ type: 'upgradeTurret', lane, slot: Number(btn.closest('.tc-slot').dataset.slot) });
+        send({ type: 'upgradeTurret', lane, slot: Number(btn.closest('.tc-slot').dataset.slot), track: btn.dataset.track });
       });
     });
     els.turretUpgrades.appendChild(cell);
   }
 }
 
-function refreshAffordability(coins) {
+function refreshAffordability(coins, snap) {
+  const isPrep = !snap || snap.phase === 'prep';
+  const you = snap && snap.players && snap.players[state.seat];
+  const pool = (you && you.soldierPool) || {};
   els.shop.querySelectorAll('.shop-item').forEach((btn) => {
-    if (state.over || (btn.dataset.unit === 'dragon' && !state.coupon)) { btn.disabled = true; btn.title = '🔒 Requires an active coupon'; return; }
+    const unit = btn.dataset.unit;
+    const isCouponUnit = unit === 'dragon' || unit === 'valkyrie';
+    if (state.over || !isPrep) {
+      btn.disabled = true;
+      btn.title = !isPrep ? 'Available in Preparation Phase' : '';
+      return;
+    }
+    if (isCouponUnit && !state.coupon) {
+      btn.disabled = true;
+      btn.title = '🔒 Requires an active coupon';
+      return;
+    }
     btn.title = '';
+    const inPool = unit ? (pool[unit] || 0) : 0;
     const cost = Number(btn.dataset.cost || '0');
-    btn.classList.toggle('cant-afford', coins < cost);
-    btn.disabled = coins < cost;
+    const costEl = btn.querySelector('.si-cost');
+    if (costEl && unit) {
+      costEl.innerHTML = inPool > 0
+        ? `<span style="color:var(--good)">FREE</span> <span class="si-pool-badge">×${inPool}</span>`
+        : `${cost}c`;
+    }
+    const canAfford = inPool > 0 || coins >= cost;
+    btn.classList.toggle('cant-afford', !canAfford);
+    btn.disabled = !canAfford;
   });
 }
 
@@ -917,19 +1053,30 @@ function updateUpgradeButtons(snap) {
   const you = snap.players[state.seat];
   const b = state.balance;
   if (!b) return;
+  const isPrep = snap.phase === 'prep';
+  const trackMap = (you.unitTrackUpgrades && you.unitTrackUpgrades[state.selectedUpgradeUnit]) || {};
+  const u = b.units[state.selectedUpgradeUnit];
+  if (!u) return;
+
   els.unitUpgrades.querySelectorAll('.upgrade-row').forEach((row) => {
-    const type = row.dataset.unit;
-    const level = (you.unitUpgrades && you.unitUpgrades[type]) || 0;
+    const track = row.dataset.track;
+    const level = trackMap[track] || 0;
+    const maxLvl = track === 'special' ? 1 : 2;
     row.querySelectorAll('.pip').forEach((pip, i) => pip.classList.toggle('on', i < level));
     const btn = row.querySelector('.upgrade-btn');
-    if (type === 'dragon' && !state.coupon) { btn.textContent = '🔒 Coupon'; btn.disabled = true; return; }
-    if (level >= 2) {
+    if ((u.couponOnly || track === 'special') && !state.coupon) {
+      btn.textContent = '🔒 Coupon';
+      btn.disabled = true;
+      return;
+    }
+    if (level >= maxLvl) {
       btn.textContent = 'MAX';
       btn.disabled = true;
     } else {
-      const cost = b.units[type].upgradeCosts[level];
-      btn.textContent = 'Lv' + (level + 1) + ' · ' + cost + 'c';
-      btn.disabled = you.coins < cost || state.over;
+      const costs = (u.trackCosts && u.trackCosts[track]) || u.upgradeCosts;
+      const cost = costs[level] || u.upgradeCosts[level];
+      btn.textContent = `Lv${level + 1} · ${cost}c`;
+      btn.disabled = !isPrep || you.coins < cost || state.over;
     }
   });
 }
@@ -937,6 +1084,7 @@ function updateUpgradeButtons(snap) {
 function updateTurretButtons(snap) {
   const b = state.balance;
   if (!b) return;
+  const isPrep = snap.phase === 'prep';
   const you = snap.players[state.seat];
   const turrets = snap.turrets || [];
   const myTurrets = {};
@@ -947,33 +1095,43 @@ function updateTurretButtons(snap) {
       const slot = Number(slotEl.dataset.slot);
       const t = myTurrets[lane + ':' + slot];
       const lvlEl = slotEl.querySelector('.tc-level');
-      const btn = slotEl.querySelector('button');
-      if (state.over) { btn.disabled = true; return; }
-      if (!t) {
-        slotEl.classList.add('empty');
-        lvlEl.textContent = '—';
-        btn.textContent = 'Empty';
-        btn.disabled = true;
+      const btns = slotEl.querySelectorAll('button');
+      if (state.over || !t) {
+        slotEl.classList.toggle('empty', !t);
+        lvlEl.textContent = t ? '●'.repeat(t.level) : '—';
+        btns.forEach((btn) => { btn.disabled = true; });
         return;
       }
       slotEl.classList.remove('empty');
-      lvlEl.textContent = '●'.repeat(t.level) + '○'.repeat(2 - t.level);
-      if (t.level >= 2) {
-        btn.textContent = 'MAX';
-        btn.disabled = true;
-      } else {
-        const cost = b.turret.upgradeCosts[t.level];
-        btn.textContent = 'Up ' + cost + 'c';
-        btn.disabled = you.coins < cost || snap.overtime;
-      }
+      const tl = t.trackLevels || {};
+      lvlEl.textContent = `⚔${tl.damage || 0} 🛡${tl.shield || 0}${tl.special ? ' ✈' : ''}`;
+      btns.forEach((btn) => {
+        const track = btn.dataset.track;
+        if (track === 'special' && !state.coupon) {
+          btn.textContent = '🔒 Flak';
+          btn.disabled = true;
+          return;
+        }
+        const cur = tl[track] || 0;
+        const maxLvl = track === 'special' ? 1 : 2;
+        if (cur >= maxLvl) {
+          btn.textContent = 'MAX';
+          btn.disabled = true;
+        } else {
+          const costs = (b.turret.trackCosts && b.turret.trackCosts[track]) || b.turret.upgradeCosts;
+          const cost = costs[cur] || b.turret.upgradeCosts[cur];
+          btn.textContent = (track === 'damage' ? '⚔ ' : track === 'shield' ? '🛡 ' : '✈ ') + cost + 'c';
+          btn.disabled = !isPrep || you.coins < cost || snap.overtime;
+        }
+      });
     });
   });
   els.shop.querySelectorAll('[data-factory]').forEach((btn) => {
     const level = you.factoryLevel || 0;
     const cost = you.factory ? [75, 125][level] : b.economy.factoryCost;
-    btn.disabled = state.over || (you.factory && level >= 2) || you.coins < cost;
+    btn.disabled = !isPrep || state.over || (you.factory && level >= 2) || you.coins < cost;
     btn.querySelector('.si-cost').textContent = you.factory && level >= 2 ? 'MAX' : cost + 'c';
-    if (you.factory) btn.querySelector('.si-role').textContent = `+${5 * (level + 1)} coins every 5s${level < 2 ? ' · Upgrade for +5' : ' · Maximum level'}`;
+    if (you.factory) btn.querySelector('.si-role').textContent = `+${b.economy.factoryIncome * (level + 1)} coins/round${level < 2 ? ' · Upgrade' : ' · MAX'}`;
   });
 }
 
@@ -1004,7 +1162,7 @@ function highlightSelection() {
     const btn = abilityButtonFor(effect);
     if (btn) btn.classList.toggle('selected', !!(isAbility && sel.effect === effect));
   });
-  const abilityNames = { rockslide: 'Rockslide', dragonfire: 'Dragon Fire' };
+  const abilityNames = { rockslide: 'Rockslide', dragonfire: 'Dragon Fire', warcry: 'Warcry Blessing' };
   els.selHint.textContent = sel
     ? (sel.kind === 'turret'
         ? (coarsePointer ? 'Tap a lane to build in a free slot. Tap the turret again to cancel.' : 'Click a lane to build in a free turret slot. Right-click / Esc to cancel.')
@@ -1082,6 +1240,13 @@ function ingestFx(prev, snap) {
       dragonFireFx(f.lane);
     } else if (f.kind === 'burn') {
       emberBurst(f.lane, 4);
+    } else if (f.kind === 'bounty' && f.side === state.seat) {
+      fx.floaters.push({
+        x: px(f.fromX), y: laneY(f.lane) - 22, vy: -48, life: 1.0, maxLife: 1.0,
+        text: `+${f.unit}c`, color: '#fde047',
+      });
+    } else if (f.kind === 'warcry') {
+      goldBurst(px(f.side === 0 ? 18 : 82), laneY(f.lane));
     }
   }
 }
@@ -1430,10 +1595,12 @@ function draw() {
   const snap = state.snapNow;
   if (snap) {
     drawPads(snap);
+    drawAnomalies(snap, now);
     drawCaches(snap, now);
     drawBurns(snap, now);
     drawTurrets(snap, now);
     drawUnits(snap, now);
+    drawFogOfWar(snap);
     drawProjectiles();
     drawParticles();
     drawRings();
@@ -1585,8 +1752,85 @@ function drawTurrets(snap, now) {
       ctx.arc(p - 4 + i * 8, py + 8, 2.2, 0, Math.PI * 2);
       ctx.fill();
     }
-    drawHealthBar(p - 18, py + 17, 36, 4, t.hp / t.maxHp);
+    if (t.maxShield > 0) {
+      drawShieldBar(p - 18, py + 14, 36, 3, t.shield / t.maxShield);
+    }
+    drawHealthBar(p - 18, py + 18, 36, 4, t.hp / t.maxHp);
   }
+}
+
+function drawAnomalies(snap, now) {
+  for (const a of snap.anomalies || []) {
+    const x = px(a.x);
+    const y = laneY(a.lane);
+    const bob = Math.sin(now / 360 + a.lane) * 2.5;
+    ctx.save();
+    if (a.kind === 'loot_coins') {
+      ctx.fillStyle = 'rgba(251, 191, 36, 0.20)';
+      ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#f59e0b';
+      roundRect(ctx, x - 11, y - 9 + bob, 22, 18, 4); ctx.fill();
+      ctx.strokeStyle = '#fef08a'; ctx.lineWidth = 1.5;
+      roundRect(ctx, x - 11, y - 9 + bob, 22, 18, 4); ctx.stroke();
+      ctx.fillStyle = '#fffbeb'; ctx.font = '800 11px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(`+${a.value}c`, x, y + 4 + bob);
+    } else if (a.kind === 'loot_buff') {
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.20)';
+      ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#0284c7';
+      ctx.beginPath(); ctx.moveTo(x, y - 14 + bob); ctx.lineTo(x + 12, y + 8 + bob); ctx.lineTo(x - 12, y + 8 + bob); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#7dd3fc'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = '#e0f2fe'; ctx.font = '800 9px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('SHRINE', x, y + 20);
+    } else if (a.kind === 'neutral_golem') {
+      ctx.fillStyle = 'rgba(168, 85, 247, 0.18)';
+      ctx.beginPath(); ctx.arc(x, y, 24, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#581c87';
+      ctx.strokeStyle = '#d8b4fe'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y + bob * 0.5, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fde047';
+      ctx.beginPath(); ctx.arc(x - 4, y - 3 + bob * 0.5, 2, 0, Math.PI * 2); ctx.arc(x + 4, y - 3 + bob * 0.5, 2, 0, Math.PI * 2); ctx.fill();
+      drawHealthBar(x - 16, y - 22, 32, 4, a.hp / (a.maxHp || 1));
+      ctx.fillStyle = '#fde047'; ctx.font = '700 9px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(`👹 +${a.value}c`, x, y + 23);
+    } else if (a.kind === 'hazard_fire') {
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
+      ctx.beginPath(); ctx.ellipse(x, y, 28, 18, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(249, 115, 22, 0.7)'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = '#fdba74'; ctx.font = '700 10px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('🔥 FIRE', x, y + 4);
+    } else if (a.kind === 'hazard_tar') {
+      ctx.fillStyle = 'rgba(30, 41, 59, 0.75)';
+      ctx.beginPath(); ctx.ellipse(x, y, 30, 18, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = '#cbd5e1'; ctx.font = '700 10px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('🕸️ TAR', x, y + 4);
+    }
+    ctx.restore();
+  }
+}
+
+function drawFogOfWar(snap) {
+  if (snap.phase !== 'prep') return;
+  const foeLeft = state.seat === 0;
+  const xStart = foeLeft ? (FIELD.x0 + FIELD.x1) / 2 : FIELD.x0;
+  const width = (FIELD.x1 - FIELD.x0) / 2;
+  ctx.save();
+  ctx.fillStyle = 'rgba(10, 15, 34, 0.52)';
+  ctx.fillRect(xStart, FIELD.y0, width, LANE_H * 5);
+  ctx.fillStyle = 'rgba(148, 163, 216, 0.55)';
+  ctx.font = '700 14px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('🌫️ FOG OF WAR — Enemy Preparing', xStart + width / 2, FIELD.y0 + LANE_H * 2.5);
+  ctx.restore();
+}
+
+function drawShieldBar(x, y, w, h, frac) {
+  frac = Math.max(0, Math.min(1, frac));
+  ctx.fillStyle = 'rgba(2,6,23,0.75)';
+  ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillRect(x, y, w * frac, h);
 }
 
 function drawUnits(snap, now) {
@@ -1645,6 +1889,28 @@ function drawUnits(snap, now) {
         ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1.6;
         ctx.beginPath(); ctx.moveTo(6, 2); ctx.lineTo(15, -6); ctx.stroke();
         break;
+      case 'shieldbearer':
+        // heavy rectangular shield + armored body
+        ctx.beginPath(); ctx.arc(-2, 0, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#94a3b8'; ctx.strokeStyle = '#0f172a'; ctx.lineWidth = 2;
+        roundRect(ctx, 5, -11, 6, 22, 2); ctx.fill(); ctx.stroke();
+        break;
+      case 'mage':
+        // hooded caster + glowing orb
+        ctx.beginPath(); ctx.moveTo(-8, 10); ctx.lineTo(0, -11); ctx.lineTo(8, 10); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#c084fc';
+        ctx.beginPath(); ctx.arc(9, -4, 4, 0, Math.PI * 2); ctx.fill();
+        break;
+      case 'valkyrie': {
+        const vflap = Math.sin(now * 0.015 + u.id * 1.3) * 4;
+        ctx.fillStyle = '#fde047';
+        ctx.beginPath(); ctx.moveTo(-2, -3); ctx.lineTo(-14, -14 - vflap); ctx.lineTo(-8, 1); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = body;
+        ctx.beginPath(); ctx.arc(0, 0, 9.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = '#fef08a'; ctx.lineWidth = 2.2;
+        ctx.beginPath(); ctx.moveTo(4, 2); ctx.lineTo(15, -8); ctx.stroke();
+        break;
+      }
       case 'ram':
         ctx.fillStyle = '#b45309';
         roundRect(ctx, -17, -9, 24, 18, 3); ctx.fill();
@@ -1739,8 +2005,10 @@ function drawUnits(snap, now) {
     ctx.restore();
 
     if (u.type === 'dragon') {
+      if (u.maxShield > 0) drawShieldBar(ux - 17, uy - 39, 34, 3.2, u.shield / u.maxShield);
       drawHealthBar(ux - 17, uy - 34, 34, 4.2, u.hp / u.maxHp);
     } else {
+      if (u.maxShield > 0) drawShieldBar(ux - 13, uy - 22, 26, 2.8, u.shield / u.maxShield);
       drawHealthBar(ux - 13, uy - 18, 26, 3.6, u.hp / u.maxHp);
     }
   }
@@ -2205,6 +2473,14 @@ els.muteBtn.addEventListener('click', () => {
   if (!muted) SFX.click();
 });
 
+if (els.btnReady) {
+  els.btnReady.addEventListener('click', () => {
+    SFX.unlock();
+    SFX.click();
+    send({ type: 'ready' });
+  });
+}
+
 cv.addEventListener('click', (ev) => {
   const lane = laneFromEvent(ev);
   if (lane === null || !state.selection) return;
@@ -2222,7 +2498,18 @@ cv.addEventListener('click', (ev) => {
 });
 cv.addEventListener('mousemove', (ev) => { state.hoverLane = laneFromEvent(ev); });
 cv.addEventListener('mouseleave', () => { state.hoverLane = null; });
-cv.addEventListener('contextmenu', (ev) => { ev.preventDefault(); clearSelection(); });
+cv.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  if (state.selection) {
+    clearSelection();
+    return;
+  }
+  const lane = laneFromEvent(ev);
+  if (lane !== null && state.snapNow && state.snapNow.phase === 'prep') {
+    SFX.click();
+    send({ type: 'recallUnit', lane });
+  }
+});
 
 // Compact-mode chrome: drawer open/close, rotate-device dismiss
 els.shopToggle.addEventListener('click', () => { SFX.click(); setSidebar(); });
@@ -2235,10 +2522,15 @@ if (els.rotateDismiss) els.rotateDismiss.addEventListener('click', () => {
 window.addEventListener('keydown', (ev) => {
   if (state.screen !== 'game') return;
   if (ev.key === 'Escape') { clearSelection(); setSidebar(false); return; }
+  if (ev.code === 'Space' && !ev.repeat && document.activeElement?.tagName !== 'INPUT') {
+    ev.preventDefault();
+    if (state.snapNow && state.snapNow.phase === 'prep') { SFX.click(); send({ type: 'ready' }); }
+    return;
+  }
   if (state.coupon && COUPON_HOTKEYS[ev.key]) {
     SFX.unlock();
     const couponKey = COUPON_HOTKEYS[ev.key];
-    if (couponKey === 'dragon') { SFX.click(); selectUnit('dragon'); } else { selectAbility(couponKey); }
+    if (couponKey === 'dragon' || couponKey === 'valkyrie') { SFX.click(); selectUnit(couponKey); } else { selectAbility(couponKey); }
     return;
   }
   const unit = HOTKEYS[ev.key];

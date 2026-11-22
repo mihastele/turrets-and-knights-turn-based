@@ -24,6 +24,7 @@ type clientMsg struct {
 	Type   string `json:"type"`
 	Lane   int    `json:"lane"`
 	Unit   string `json:"unit"`
+	Track  string `json:"track"` // upgrade track: damage, attackSpeed, hp, shield, special
 	Emote  string `json:"emote"`
 	Effect string `json:"effect"` // coupon field effect id for "fieldEffect"
 	Slot   *int   `json:"slot"`   // turret slot for upgradeTurret (omitted = lowest built slot); ignored for turret builds (auto)
@@ -218,6 +219,12 @@ func (s *Server) handleClientMsg(code string, pl *player, conn *wsConn, msg clie
 		action.Slot = *msg.Slot
 	}
 	switch msg.Type {
+	case "ready":
+		action.Kind = sim.ActionReady
+	case "recallUnit":
+		action.Kind = sim.ActionRecallUnit
+		action.Lane = msg.Lane
+		action.Unit = sim.UnitType(msg.Unit)
 	case "deploy":
 		action.Kind = sim.ActionDeploy
 		action.Lane = msg.Lane
@@ -232,9 +239,11 @@ func (s *Server) handleClientMsg(code string, pl *player, conn *wsConn, msg clie
 	case "upgradeUnit":
 		action.Kind = sim.ActionUpgradeUnit
 		action.Unit = sim.UnitType(msg.Unit)
+		action.Track = sim.UpgradeTrack(msg.Track)
 	case "upgradeTurret":
 		action.Kind = sim.ActionUpgradeTurret
 		action.Lane = msg.Lane
+		action.Track = sim.UpgradeTrack(msg.Track)
 	case "fieldEffect":
 		action.Kind = sim.ActionFieldEffect
 		action.Lane = msg.Lane
@@ -507,8 +516,12 @@ func (s *Server) broadcastSnapshotLocked(rm *room) {
 	if rm.game == nil {
 		return
 	}
-	snap := rm.game.Snapshot()
-	s.broadcastLocked(rm, snap)
+	pair := rm.game.SnapshotPair()
+	for seat, p := range rm.players {
+		if p != nil && p.conn != nil {
+			s.sendToLocked(p.conn, pair[seat])
+		}
+	}
 }
 
 func (s *Server) writePump(c *wsConn) {

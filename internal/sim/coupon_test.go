@@ -22,14 +22,19 @@ func TestDragonRequiresCoupon(t *testing.T) {
 	if coinBalance(s, SideA) != 500-140 {
 		t.Fatalf("dragon cost not deducted: %d", coinBalance(s, SideA))
 	}
+	// Valkyrie is also coupon-locked.
+	if err := s.ApplyAction(Action{Kind: ActionDeploy, Side: SideA, Lane: 0, Unit: Valkyrie}); !errors.Is(err, ErrCouponRequired) {
+		t.Fatalf("deploying valkyrie without coupon: want ErrCouponRequired, got %v", err)
+	}
+	if err := s.ApplyAction(Action{Kind: ActionDeploy, Side: SideA, Lane: 0, Unit: Valkyrie, Entitled: true}); err != nil {
+		t.Fatalf("deploying valkyrie with coupon: %v", err)
+	}
 }
 
 func TestDragonIsFlyingAndSplashDamages(t *testing.T) {
 	s := newTestSim(t)
-	// A turret guards the lane; it must never target the dragon.
-	if err := s.ApplyAction(Action{Kind: ActionBuildTurret, Side: SideB, Lane: 2}); err != nil {
-		t.Fatal(err)
-	}
+	clearTowers(s)
+	s.anomalies = nil
 	giveCoins(s, SideA, 500)
 	giveCoins(s, SideB, 500)
 	// B deploys two soldiers close together.
@@ -41,8 +46,9 @@ func TestDragonIsFlyingAndSplashDamages(t *testing.T) {
 	if err := s.ApplyAction(Action{Kind: ActionDeploy, Side: SideA, Lane: 2, Unit: Dragon, Entitled: true}); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate until the dragon is in range and swings; dragons outrange soldiers.
-	for i := 0; i < 20*30 && s.units[0].HP == s.units[0].MaxHP; i++ {
+	startCombat(t, s)
+	// Simulate until the dragon is in range and breathes fire.
+	for i := 0; i < 20*20 && s.units[0].HP == s.units[0].MaxHP; i++ {
 		s.Step(TickDT)
 	}
 	// Find damage dealt to B soldiers.
@@ -57,21 +63,19 @@ func TestDragonIsFlyingAndSplashDamages(t *testing.T) {
 	if soldiers == 0 {
 		t.Fatal("no soldiers left to observe")
 	}
-	if soldierHP >= float64(soldiers)*70 {
+	if soldierHP >= float64(soldiers)*75 {
 		t.Fatal("expected dragon splash fire to wound multiple soldiers")
 	}
 }
 
 func TestTurretCannotTargetDragon(t *testing.T) {
 	s := newTestSim(t)
-	if err := s.ApplyAction(Action{Kind: ActionBuildTurret, Side: SideB, Lane: 0}); err != nil {
-		t.Fatal(err)
-	}
 	giveCoins(s, SideA, 500)
 	if err := s.ApplyAction(Action{Kind: ActionDeploy, Side: SideA, Lane: 0, Unit: Dragon, Entitled: true}); err != nil {
 		t.Fatal(err)
 	}
-	// Let them fight for a while; turret should never lock onto the dragon.
+	startCombat(t, s)
+	// Let them fight for a while; base turret (without Flak special) should never lock onto the dragon.
 	step(s, 6)
 	for _, tr := range s.turrets[SideB][0] {
 		if tr == nil {
@@ -116,13 +120,13 @@ func TestRockslideDamagesGroundEnemiesOnly(t *testing.T) {
 	if knight == nil || dragon == nil {
 		t.Fatal("missing units")
 	}
-	if knight.HP >= 95 {
+	if knight.HP >= knight.MaxHP {
 		t.Fatalf("knight should have taken rockslide damage, hp=%v", knight.HP)
 	}
 	if dragon.HP != dragon.MaxHP {
 		t.Fatalf("flying dragon should be unaffected by rockslide, hp=%v/%v", dragon.HP, dragon.MaxHP)
 	}
-	if got := coinBalance(s, SideA); got != 500-50 {
+	if got := coinBalance(s, SideA); got != 500-s.cfg.Coupon.Rockslide.Cost {
 		t.Fatalf("rockslide cost not deducted: %d", got)
 	}
 }
@@ -166,6 +170,7 @@ func TestDragonFireBurnsLaneOverTime(t *testing.T) {
 	if err := s.ApplyAction(Action{Kind: ActionFieldEffect, Side: SideA, Lane: 3, Effect: EffectDragonFire, Entitled: true}); err != nil {
 		t.Fatalf("dragon fire: %v", err)
 	}
+	startCombat(t, s)
 	if len(s.burns) != 1 {
 		t.Fatalf("expected 1 active burn, got %d", len(s.burns))
 	}

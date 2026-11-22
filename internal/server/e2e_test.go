@@ -75,14 +75,18 @@ func readMsg(t *testing.T, c *websocket.Conn, timeout time.Duration) map[string]
 
 // readUntil reads messages until pred matches or the deadline passes.
 type snapshot struct {
-	Type         string  `json:"type"`
-	Time         float64 `json:"time"`
-	Finished     bool    `json:"finished"`
-	Draw         bool    `json:"draw"`
-	Winner       int     `json:"winner"`
-	WinLane      int     `json:"winLane"`
-	Overtime     bool    `json:"overtime"`
-	TurretFactor float64 `json:"turretFactor"`
+	Type           string  `json:"type"`
+	Time           float64 `json:"time"`
+	Phase          string  `json:"phase"`
+	Round          int     `json:"round"`
+	PhaseRemaining float64 `json:"phaseRemaining"`
+	Ready          [2]bool `json:"ready"`
+	Finished       bool    `json:"finished"`
+	Draw           bool    `json:"draw"`
+	Winner         int     `json:"winner"`
+	WinLane        int     `json:"winLane"`
+	Overtime       bool    `json:"overtime"`
+	TurretFactor   float64 `json:"turretFactor"`
 }
 
 func readSnapshot(t *testing.T, c *websocket.Conn, timeout time.Duration) snapshot {
@@ -200,16 +204,39 @@ func TestEndToEndMatch(t *testing.T) {
 		t.Fatal("expected an error message for invalid lane")
 	}
 
-	// Deploy a soldier down lane 0 (the enemy never defends).
+	// Deploy a soldier down lane 0 during Prep, then both players Ready up!
 	if err := wsA.WriteJSON(map[string]any{"type": "deploy", "unit": "soldier", "lane": 0}); err != nil {
 		t.Fatal(err)
 	}
+	if err := wsA.WriteJSON(map[string]any{"type": "ready"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wsB.WriteJSON(map[string]any{"type": "ready"}); err != nil {
+		t.Fatal(err)
+	}
 
-	// Wait for the match to end (soldier crosses in ~21s).
+	// Verify Combat starts immediately when both players are Ready.
+	gotCombat := false
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := readSnapshot(t, wsB, 2*time.Second)
+		if snap.Phase == "combat" {
+			gotCombat = true
+			break
+		}
+	}
+	if !gotCombat {
+		t.Fatal("expected combat phase to start immediately after both players ready")
+	}
+
+	// Player B resigns to finish the match and test rematch flow.
+	if err := wsB.WriteJSON(map[string]any{"type": "resign"}); err != nil {
+		t.Fatal(err)
+	}
 	var final snapshot
-	end := time.Now().Add(60 * time.Second)
+	end := time.Now().Add(5 * time.Second)
 	for time.Now().Before(end) {
-		snap := readSnapshot(t, wsB, 5*time.Second)
+		snap := readSnapshot(t, wsA, 2*time.Second)
 		if snap.Finished {
 			final = snap
 			break
@@ -218,8 +245,8 @@ func TestEndToEndMatch(t *testing.T) {
 	if !final.Finished {
 		t.Fatal("match did not finish in time")
 	}
-	if final.Draw || final.Winner != 0 || final.WinLane != 0 {
-		t.Fatalf("expected side A to win lane 0, got draw=%v winner=%d lane=%d", final.Draw, final.Winner, final.WinLane)
+	if final.Draw || final.Winner != 0 {
+		t.Fatalf("expected side A to win, got draw=%v winner=%d", final.Draw, final.Winner)
 	}
 
 	// Both sides request a rematch; server should reset the match.

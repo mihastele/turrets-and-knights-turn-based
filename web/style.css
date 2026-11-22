@@ -646,3 +646,65 @@ html, body {
 .coffee-badge { display:inline-block; padding:10px 16px; margin:4px 8px 10px 0; border-radius:8px; background:#ffdd00; color:#161616; font-weight:800; text-decoration:none; }
 .coupon-panel.locked .ability-btn { opacity:.65; }
 .coupon-panel.locked .ab-name::before { content:"🔒 "; }
+
+/* ======= Turn-Based HUD & 5-Track Upgrades ======= */
+.turn-row { display: flex; align-items: center; gap: 10px; }
+.turn-sub { display: flex; align-items: center; gap: 8px; }
+.round-badge {
+  font-size: 11px; font-weight: 800; letter-spacing: 1px;
+  background: var(--panel-3); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 8px; color: var(--accent);
+}
+.ready-status { font-size: 10px; color: var(--muted); }
+.btn-ready {
+  background: linear-gradient(180deg, #34d399, #059669);
+  border-color: #6ee7b7; color: #022c22;
+  font-weight: 800; font-size: 12px; padding: 5px 12px; letter-spacing: .8px;
+}
+.btn-ready.is-ready {
+  background: linear-gradient(180deg, #fbbf24, #d97706);
+  border-color: #fde68a; color: #451a03;
+}
+.btn-ready:disabled { opacity: .35; cursor: not-allowed; }
+.phase-pill.combat { color: var(--accent-2); font-weight: 800; }
+.phase-pill.prep { color: var(--good); font-weight: 800; }
+
+.pool-bar {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  background: rgba(52, 211, 153, 0.10);
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  border-radius: 8px; padding: 6px 8px; margin-bottom: 8px;
+  font-size: 11px; align-items: center;
+}
+.pool-chip {
+  background: var(--panel-3); border: 1px solid var(--good);
+  border-radius: 6px; padding: 2px 7px; font-weight: 700; color: #bbf7d0;
+  cursor: pointer;
+}
+.pool-chip:hover { filter: brightness(1.2); }
+
+.si-pool-badge {
+  display: inline-block; margin-left: 5px;
+  background: #059669; color: #ecfdf5; border-radius: 999px;
+  padding: 0 5px; font-size: 10px; font-weight: 800;
+}
+.shop-item.locked-coupon {
+  border-style: dashed; border-color: rgba(251, 191, 36, 0.35);
+}
+
+.upgrade-unit-tabs {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 7px;
+}
+.up-tab {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--muted); font-size: 11px; padding: 3px 7px; cursor: pointer;
+}
+.up-tab.active {
+  background: var(--panel-3); border-color: var(--accent); color: var(--text); font-weight: 700;
+}
+.up-tab.locked { border-style: dashed; }
+.upgrade-row.locked-track { opacity: 0.72; }
+.feed li.bounty { color: #fde047; border-color: #eab308; font-weight: 700; }
+.feed li.warcry { color: #a7f3d0; border-color: var(--good); }
+.feed li.combatStart { color: #fca5a5; border-color: var(--bad); font-weight: 700; }
+.feed li.roundPrep { color: #7dd3fc; border-color: var(--accent); font-weight: 700; }

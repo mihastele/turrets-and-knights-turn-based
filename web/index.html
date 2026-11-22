@@ -46,14 +46,14 @@
       <p id="lobby-error" class="lobby-error"></p>
 
       <div class="howto">
-        <h3>How it works</h3>
+        <h3>How it works (Turn-Based Edition)</h3>
         <ul>
-          <li>Both commanders spend coins on <b>troops, turrets and factories</b>.</li>
-          <li>Each troop that crosses the enemy <b>breach line</b> takes one life. Choose 1–10 lives when creating a room.</li>
-          <li>You start with <b>100 coins</b>, get <b>+10 every 5s</b>, plus a shared windfall of 5–10 every 12–20s.</li>
-          <li>A <b>factory</b> adds +5 coins every 5s. Upgrade it twice to earn up to +15.</li>
-          <li>At <b>6:00</b> overtime starts: no new turrets, turrets lose 15% damage every 30s. At <b>10:00</b> the match is a draw.</li>
-          <li>Got a <b>coupon</b>? Redeem it below the room buttons to unlock the <b>Dragon</b> and lane-wide field effects.</li>
+          <li><b>Prep &amp; Combat Turns:</b> Plan your army during the <b>30s Prep Phase</b> (hidden by Fog of War). Click <b>Ready</b> to start Combat early, or wait for the timer.</li>
+          <li><b>Soldier Pool:</b> Surviving units return to your <b>Soldier Pool</b> at full HP &amp; Shield after each round and re-deploy for <b>FREE</b>!</li>
+          <li><b>Protective Towers:</b> Every lane starts with 1 tower per side. All units can attack towers, and ground units cannot pass an enemy tower.</li>
+          <li><b>Dynamic Economy:</b> Earn <b>Kill Bounties</b> (bigger units = bigger bounties), <b>10% round interest</b>, factories, and <b>Lane Anomalies</b> (loot, shrines, neutral golems &amp; hazards).</li>
+          <li><b>5-Track Upgrades:</b> Specialize units in Attack, Speed, HP, Shield, or <b>Elite Doctrine 🔒</b>.</li>
+          <li>Got a <b>coupon</b>? Redeem it to unlock the <b>Valkyrie</b>, <b>Dragon</b>, <b>Elite Doctrines</b>, and <b>Tactical Abilities</b>.</li>
         </ul>
       </div>
     </div>
@@ -73,9 +73,16 @@
       </div>
 
       <div class="tb-group tb-center">
-        <div id="clock" class="clock">0:00</div>
-        <div id="phase-pill" class="phase-pill">MATCH</div>
-        <div id="turret-power" class="turret-power hidden">Turrets 100%</div>
+        <div class="turn-row">
+          <span id="round-badge" class="round-badge">ROUND 1/10</span>
+          <div id="clock" class="clock">0:30</div>
+          <button id="btn-ready" class="btn btn-ready" title="Toggle Ready (Space)">READY</button>
+        </div>
+        <div class="turn-sub">
+          <div id="phase-pill" class="phase-pill">PREP PHASE</div>
+          <span id="ready-status" class="ready-status"></span>
+        </div>
+        <div id="turret-power" class="turret-power hidden">ESCALATION</div>
       </div>
 
       <div class="tb-group tb-right">
@@ -148,9 +155,10 @@
           <button id="sidebar-close" class="sidebar-close" aria-label="Close shop">✕</button>
         </div>
         <section class="panel">
-          <h3 class="panel-title">Deploy <span class="panel-hint">click a lane to send</span></h3>
+          <h3 class="panel-title">Deploy <span class="panel-hint">prep phase · right-click lane to recall</span></h3>
+          <div id="pool-bar" class="pool-bar hidden"></div>
           <div id="shop" class="shop-grid"></div>
-          <p id="selection-hint" class="selection-hint">Select a unit, then click a lane. Right-click / Esc to cancel.</p>
+          <p id="selection-hint" class="selection-hint">Select a unit, then click a lane. Right-click a lane to recall.</p>
         </section>
 
         <section class="panel coupon-panel" id="coupon-panel">
@@ -158,20 +166,26 @@
           <p class="coupon-expiry" id="coupon-expiry"></p>
           <div class="ability-list">
             <button class="ability-btn" id="ability-rockslide" data-effect="rockslide">
-              <span class="ab-head"><span class="ab-icon">🪨</span><span class="ab-name">Rockslide</span><span class="ab-cost" id="ability-rockslide-cost">50c</span></span>
+              <span class="ab-head"><span class="ab-icon">🪨</span><span class="ab-name">Rockslide</span><span class="ab-cost" id="ability-rockslide-cost">45c</span></span>
               <span class="ab-desc">Rockfall crushes every ground enemy in a lane. Flyers dodge.</span>
               <span class="ab-cooldown" id="cooldown-rockslide"></span>
             </button>
             <button class="ability-btn" id="ability-dragonfire" data-effect="dragonfire">
-              <span class="ab-head"><span class="ab-icon">🔥</span><span class="ab-name">Dragon Fire</span><span class="ab-cost" id="ability-dragonfire-cost">80c</span></span>
+              <span class="ab-head"><span class="ab-icon">🔥</span><span class="ab-name">Dragon Fire</span><span class="ab-cost" id="ability-dragonfire-cost">70c</span></span>
               <span class="ab-desc">Set a lane ablaze — burning ground sears everything inside.</span>
               <span class="ab-cooldown" id="cooldown-dragonfire"></span>
+            </button>
+            <button class="ability-btn" id="ability-warcry" data-effect="warcry">
+              <span class="ab-head"><span class="ab-icon">📯</span><span class="ab-name">Warcry Blessing</span><span class="ab-cost" id="ability-warcry-cost">40c</span></span>
+              <span class="ab-desc">Grants +35% attack speed &amp; +30 Shield to your units in a lane.</span>
+              <span class="ab-cooldown" id="cooldown-warcry"></span>
             </button>
           </div>
         </section>
 
         <section class="panel">
-          <h3 class="panel-title">War upgrades <span class="panel-hint">apply to future spawns</span></h3>
+          <h3 class="panel-title">War upgrades <span class="panel-hint">5-track specialization</span></h3>
+          <div id="upgrade-unit-tabs" class="upgrade-unit-tabs"></div>
           <div id="unit-upgrades" class="upgrade-list"></div>
         </section>
 
